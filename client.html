@@ -417,12 +417,47 @@ function handleFiles(files){
 $('btnClear').onclick = () => clearPending(true);
 
 /* ================= Сигналинг через сервер ================= */
+function candCount(desc){ return desc && desc.sdp ? (desc.sdp.match(/a=candidate/g) || []).length : 0; }
+
 function waitIce(){
+  /* ждём сбор ICE-кандидатов (максимум 6 с), возвращаем сколько собрали */
   return new Promise(res => {
-    if (pc.iceGatheringState === 'complete') return res();
-    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') res(); };
-    setTimeout(res, 4000);
+    let n = candCount(pc.localDescription);
+    const done = () => res(n);
+    if (pc.iceGatheringState === 'complete') return done();
+    pc.onicecandidate = e => {
+      if (e.candidate){ n++; if (n === 1) setStatus('Ищем путь до собеседника (ICE)…'); }
+      else done();                    // null-кандидат = сбор завершён
+    };
+    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') done(); };
+    setTimeout(done, 6000);
   });
+}
+
+/* watchdog: если после handshake связь так и не открылась — сказать об этом вслух */
+let dogTimer = null;
+function connWatchdog(){
+  clearInterval(dogTimer);
+  const t0 = Date.now();
+  dogTimer = setInterval(() => {
+    if (ready){ clearInterval(dogTimer); return; }
+    if (!pc){ clearInterval(dogTimer); return; }
+    const cs = pc.connectionState || 'new';
+    if (cs === 'connected') return;            // ждём onopen канала
+    const lc = candCount(pc.localDescription), rc = candCount(pc.remoteDescription);
+    if (Date.now() - t0 > 25000){
+      clearInterval(dogTimer);
+      if (lc === 0 && rc === 0)
+        setStatus('Не найдено ни одного ICE-кандидата. Обычно это блокировка WebRTC (файрвол/антивирус/расширение браузера). Нажмите «Переподключиться» на обоих ПК', 'err');
+      else
+        setStatus('Не удалось пробить NAT (' + cs + ', ICE ' + (pc.iceConnectionState || '?') +
+          '; мои кандидаты: ' + lc + ', собеседника: ' + rc + '). Нажмите «Переподключиться» на обоих ПК; ' +
+          'для проверки попробуйте другую сеть (например, мобильный интернет)', 'err');
+      showReconnect();
+    } else if (Date.now() - t0 > 0){
+      setStatus('Устанавливаем связь: WebRTC ' + cs + ', ICE ' + (pc.iceConnectionState || '?') + '…');
+    }
+  }, 2500);
 }
 function stopPolling(){ state.polling = false; }
 
@@ -437,8 +472,9 @@ function waitForMsg(handler, ms){
       try {
         const r = await api('/api/get?token=' + encodeURIComponent(state.token));
         if (r.status === 'data'){
-          if (handler(r.blob)) return resolve({ status:'ok' });
-          return resolve({ status:'bad' });   // неверный ключ
+          const verdict = await handler(r.blob);   // ждём и sync-, и async-обработчик
+          if (verdict) return resolve({ status:'ok' });
+          return resolve({ status:'bad' });        // неверный ключ
         }
       } catch (e) { setStatus('Опрос прерван: ' + e.message, 'err'); stopPolling(); return resolve({ status:'fail' }); }
       setTimeout(poll, 1000);
@@ -451,7 +487,7 @@ function inputsOk(){
   const pass = $('inPass').value;
   if (!room){ setStatus('Укажите номер комнаты', 'err'); release(); return null; }
   if (room.length < 3 || room.length > 32 || !/^[A-Za-z0-9_-]+$/.test(room))
-    { setStatus('Комната: 3–32 символа (латиница, цифры, - _)', 'err'); release(); return null; }
+    { setStatus('Имя комнаты («Номер комнаты», а не пароль): только латиница, цифры, - _ ; без пробелов и русских букв, 3–32 символа. Сейчас введено: «' + room + '»', 'err'); release(); return null; }
   if (pass.length < 4){ setStatus('Пароль: минимум 4 символа', 'err'); release(); return null; }
   return { room, K: sha256hex(utf8('p2p-signaling|' + room + '|' + pass)) };
 }
@@ -484,8 +520,10 @@ async function hostCore(){
     (async () => {
       await pc.setRemoteDescription({ type: 'offer', sdp: msg.s });
       await pc.setLocalDescription(await pc.createAnswer());
-      await waitIce();
+      const cands = await waitIce();
+      setStatus('Ответ отправлен (кандидатов: ' + cands + '). Устанавливаем связь…');
       await api('/api/send', { token: state.token, blob: blobWrap(JSON.stringify({ s: pc.localDescription.sdp, type: 'answer' }), state.K) });
+      connWatchdog();
     })().catch(e => { setStatus('Сбой handshake: ' + e.message, 'err'); release(); });
     return true;
   }, 10 * 60 * 1000);
@@ -510,12 +548,14 @@ async function guestRun(){
     await waitIce();
     await api('/api/send', { token: state.token, blob: blobWrap(JSON.stringify({ s: pc.localDescription.sdp, type: 'offer' }), state.K) });
     setStatus('Ожидаем ответ хоста…');
-    const w = await waitForMsg(blob => {
+    const w = await waitForMsg(async blob => {
       const plain = blobUnwrap(blob, state.K);
       if (!plain){ setStatus('Пароль комнаты не совпал. Проверьте пароль и «Переподключитесь»', 'err'); release(); return false; }
       let msg;
       try { msg = JSON.parse(plain); } catch { release(); return false; }
-      pc.setRemoteDescription({ type: 'answer', sdp: msg.s }).catch(e => { setStatus('Сбой handshake: ' + e.message, 'err'); release(); });
+      await pc.setRemoteDescription({ type: 'answer', sdp: msg.s });
+      setStatus('Ответ хоста получен (его кандидатов: ' + candCount(pc.remoteDescription) + '). Устанавливаем связь…');
+      connWatchdog();
       return true;
     }, 10 * 60 * 1000);
     if (w.status === 'timeout'){ setStatus('Хост не ответил. Проверьте, что хостная страница открыта, и «Переподключитесь»', 'err'); release(); }
