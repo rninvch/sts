@@ -371,21 +371,26 @@ loadServerAddrs();
 if (location.host && !$('inServer').value) $('inServer').value = location.host;
 
 /* ============ загрузка файлов на сервер (до 2 параллельно) ============ */
-const CHUNK = 512 * 1024;      // data-размер куска
-const TAGB  = 32;              // байт тега после каждого куска
+const CHUNK      = 512 * 1024;   // размер куска по умолчанию (Chrome/прочие)
+const CHUNK_FF   = 128 * 1024;   // Firefox на Linux рвёт крупный POST — ему режем мельче
+const TAGB       = 32;           // байт тега после каждого куска
 const MAX_ACTIVE = 2;
-const STEP = CHUNK + TAGB;     // сколько занимает один кусок в файле на сервере
+/* кусок выбирается на Отправителе и УЕДИТ в метке файла — получатель
+   всегда считает границы по метке, поэтому разные браузеры совместимы */
+function pickChunk(){ return /firefox/i.test(navigator.userAgent) ? CHUNK_FF : CHUNK; }
+function stepOf(csz){ return csz + TAGB; }   // сколько занимает кусок в файле на сервере
 
-const uploads = new Map();  // id → {id,file,name,size,type,nonce,metaSent,sent,t0,pos0,st}
+const uploads = new Map();  // id → {id,file,name,size,type,nonce,csz,metaSent,sent,t0,pos0,st}
 let nowUploading = 0;
 
 /* сколько data-байт уже на сервере для тела размером bodyBytes (куски полные либо частично последний) */
-function dataDone(bodyBytes){
-  const full = Math.floor(bodyBytes / STEP);       // полные куски
-  const rem = bodyBytes % STEP;
-  return full * CHUNK + Math.max(0, rem - TAGB);
+function dataDone(bodyBytes, csz){
+  const step = csz + TAGB;
+  const full = Math.floor(bodyBytes / step);       // полные куски
+  const rem = bodyBytes % step;
+  return full * csz + Math.max(0, rem - TAGB);
 }
-function bodyTotal(size){ return size + TAGB * Math.ceil(size / CHUNK); }
+function bodyTotal(size, csz){ return size + TAGB * Math.ceil(size / csz); }
 
 function fileIdOf(name, size){ return sha256hex(utf8('|id|' + name + ':' + size)).slice(0, 16); }
 
@@ -397,7 +402,8 @@ function sendFile(file){
     return;
   }
   const same = boxItems.get(id);
-  if (same && (same.ready || same.bytes >= bodyTotal(file.size))){
+  const csz = pickChunk();
+  if (same && (same.ready || same.bytes >= bodyTotal(file.size, csz))){
     addBar(id, file.name + ' — уже есть в ящике', false);
     markDone(id); setRowNote(id, 'готово — уже в ящике', false);
     return;
@@ -406,14 +412,14 @@ function sendFile(file){
   if (prev && prev.st === 'fail') u = prev;               // повторный drag → докачка той же записи
   else {
     u = { id, file, name:file.name, size:file.size, type:file.type,
-          nonce:nonceHex(16), metaSent:false, sent:0, t0:0, pos0:0, st:'queued' };
+          nonce:nonceHex(16), csz, metaSent:false, sent:0, t0:0, pos0:0, st:'queued' };
     uploads.set(id, u);
   }
   u.file = file;
-  if (same && !same.locked && same.bytes > 0 && same.bytes < bodyTotal(file.size)){
+  if (same && !same.locked && same.bytes > 0 && same.bytes < bodyTotal(file.size, u.csz)){
     // докачка (в т.ч. после закрытия страницы): nonce и тело — из имеющейся метки
-    u.nonce = same.nonce; u.metaSent = true;
-    u.sent = dataDone(same.bytes);
+    u.nonce = same.nonce; u.csz = same.csz || u.csz; u.metaSent = true;
+    u.sent = dataDone(same.bytes, u.csz);
     u.st = 'queued'; u.t0 = 0;
     addBar(id, file.name + ' (докачка ' + human(u.sent) + ')', false);
   } else if (!prev){
@@ -434,21 +440,22 @@ function pump(){
 }
 async function uploadRun(u){
   u.t0 = performance.now(); u.pos0 = u.sent;
+  const csz = u.csz, step = stepOf(csz);
   let off = u.sent;
   try {
     if (!u.metaSent){
-      const meta = blobWrap(JSON.stringify({ name:u.name, type:u.type, size:u.size, nonce:u.nonce }), state.K);
+      const meta = blobWrap(JSON.stringify({ name:u.name, type:u.type, size:u.size, nonce:u.nonce, chunk:csz }), state.K);
       await api('/api/meta', { room: state.room, id: u.id, meta });
       u.metaSent = true;
       off = u.sent = 0;                       // метка сбрасывает тело сервера
     } else {
       const s = await api('/api/size?' + roomQ() + '&id=' + u.id);
-      off = u.sent = dataDone(s.bytes);
+      off = u.sent = dataDone(s.bytes, csz);
     }
     while (off < u.size){
       if (!state.connected) throw new Error('соединение прервано');
-      const len = Math.min(CHUNK, u.size - off);
-      const bodyOff = Math.floor(off / CHUNK) * STEP;
+      const len = Math.min(csz, u.size - off);
+      const bodyOff = Math.floor(off / csz) * step;
       const plain = new Uint8Array(await u.file.slice(off, off + len).arrayBuffer());
       const ct = xorBytes(plain, keystreamAt(state.K, u.nonce, off, len));
       const tagHex = sha256hex(state.K + '|' + u.nonce + '|' + off + '|' + latin1(ct));
@@ -457,7 +464,7 @@ async function uploadRun(u){
       const frame = new Uint8Array(len + TAGB);
       frame.set(ct, 0); frame.set(tagB, len);
       let ok = false, lastErr = null;
-      for (let att = 0; att < 3 && !ok; att++){
+      for (let att = 0; att < 4 && !ok; att++){
         try {
           await apiRaw('/api/up?' + roomQ() + '&id=' + u.id + '&off=' + bodyOff, frame);
           ok = true;
@@ -465,9 +472,9 @@ async function uploadRun(u){
           lastErr = e;
           if (/Offset mismatch/.test(e.message)){
             const s = await api('/api/size?' + roomQ() + '&id=' + u.id);
-            off = u.sent = dataDone(s.bytes); ok = true;
+            off = u.sent = dataDone(s.bytes, csz); ok = true;
           } else {
-            await sleep(400 * (att + 1));
+            await sleep([400, 900, 1600][att] || 1600);   // Firefox'у нужен «прогрев» между попытками
           }
         }
       }
@@ -512,7 +519,8 @@ async function refreshBox(){
     if (inner){ try { meta = JSON.parse(inner); } catch (e) { meta = null; } }
     boxItems.set(it.id, meta
       ? { id:it.id, bytes:it.bytes, size:meta.size, name:meta.name, type:meta.type,
-          nonce:meta.nonce, ts:it.ts, ready: it.bytes >= bodyTotal(meta.size), locked:false }
+          nonce:meta.nonce, csz:meta.chunk || CHUNK, ts:it.ts,
+          ready: it.bytes >= bodyTotal(meta.size, meta.chunk || CHUNK), locked:false }
       : { id:it.id, bytes:it.bytes, ts:it.ts, locked:true });
   }
   for (const id of [...boxItems.keys()]) if (!seen.has(id)) boxItems.delete(id); // удалённые собеседником
@@ -528,7 +536,7 @@ function renderBox(){
     const name = it.locked ? '(метка не расшифрована — другой пароль)' : it.name;
     const status = it.locked ? 'нечитаемо, только размер'
       : it.ready ? 'готов · ' + tsAgo(it.ts)
-      : 'загружается: ' + human(dataDone(it.bytes)) + ' / ' + human(it.size);
+      : 'загружается: ' + human(dataDone(it.bytes, it.csz)) + ' / ' + human(it.size);
     tr.innerHTML =
       '<td>' + esc(name) + '</td>' +
       '<td>' + human(it.locked ? it.bytes : it.size ?? it.bytes) + '</td>' +
@@ -563,24 +571,25 @@ const dls = new Map();   /* id → {off, parts, t0, pos0} */
 async function downloadRun(id){
   const it = boxItems.get(id);
   if (!it || it.locked) throw new Error('файл нечитаем');
-  if (it.bytes < bodyTotal(it.size)) throw new Error('загрузка ещё не завершена (' + human(dataDone(it.bytes)) + '/' + human(it.size) + ')');
+  if (it.bytes < bodyTotal(it.size, it.csz)) throw new Error('загрузка ещё не завершена (' + human(dataDone(it.bytes, it.csz)) + '/' + human(it.size) + ')');
   let rec = dls.get(id) || dls.set(id, { off:0, parts:[], t0:0, pos0:0 }).get(id);
   addBar(id, rec.off ? (it.name + ' (докачка ' + human(rec.off) + ')') : it.name, true);
   rec.t0 = performance.now(); rec.pos0 = rec.off;
+  const csz = it.csz, step = stepOf(csz);
   let off = rec.off;
   try {
     while (off < it.size){
-      const len = Math.min(CHUNK, it.size - off);
-      const bodyOff = Math.floor(off / CHUNK) * STEP;
+      const len = Math.min(csz, it.size - off);
+      const bodyOff = Math.floor(off / csz) * step;
       const want = len + TAGB;
       let frame = null;
-      for (let att = 0; att < 3 && !frame; att++){
+      for (let att = 0; att < 4 && !frame; att++){
         try {
-          const r = await fetch(serverBase() + '/api/file?' + roomQ() + '&id=' + id + '&off=' + bodyOff + '&len=' + want);
+          const r = await fetchSafe(serverBase() + '/api/file?' + roomQ() + '&id=' + id + '&off=' + bodyOff + '&len=' + want, undefined, 3);
           if (!r.ok) throw new Error('HTTP ' + r.status);
           frame = new Uint8Array(await r.arrayBuffer());
         } catch (e) {
-          await sleep(400 * (att + 1));
+          await sleep([400, 900, 1600][att] || 1600);
           if (!state.connected) throw new Error('соединение прервано');
         }
       }
