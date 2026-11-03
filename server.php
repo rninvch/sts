@@ -35,6 +35,12 @@ const ROOM_RE          = '/^[A-Za-z0-9_-]{3,32}$/';
 $STATE = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'p2p_signaling_state';
 if (!is_dir($STATE)) { @mkdir($STATE, 0700, true); }
 
+/* ---- отладочный лог (временно) ---- */
+function slog(string $s): void {
+  @file_put_contents($GLOBALS['STATE'] . DIRECTORY_SEPARATOR . 'srv.log',
+    date('H:i:s') . ' ' . $s . PHP_EOL, FILE_APPEND);
+}
+
 /* ---------- режим запуска: php server.php [порт] | php server.php --ip ---------- */
 
 if (PHP_SAPI === 'cli') {
@@ -253,6 +259,7 @@ function housekeeping(): void {
 }
 
 function wipe_blob(string $roomHash, string $name): void {
+  slog("WIPE $name room=" . substr($roomHash, 0, 8));
   @unlink(room_path($roomHash) . DIRECTORY_SEPARATOR . $name);
 }
 
@@ -318,6 +325,7 @@ if ($path === '/api/join') {
   $raw = stream_get_contents($fp);
   $slots = json_decode((string)$raw, true);
   if (!is_array($slots)) $slots = [];
+  slog("JOIN room=" . substr($roomHash, 0, 8) . " existing=" . json_encode(array_keys($slots)));
 
   // одноразовые «акты» хоста/гостя; повторный join той же роли допустим (переподключение)
   $role = null;
@@ -330,8 +338,8 @@ if ($path === '/api/join') {
 
   $token = bin2hex(random_bytes(16));
   $slots[$role] = ['t' => token_hash($token), 'ts' => time()];
-  if ($role === 'guest' || $role === 'host') {
-    // переподключение/новая сессия: старые сигналы нечитаемы
+  // переподключение/новая сессия: старые сигналы нечитаемы
+  if (isset($slots['host']) || isset($slots['guest'])) {
     wipe_blob($roomHash, 'offer.enc');
     wipe_blob($roomHash, 'answer.enc');
   }
@@ -369,9 +377,27 @@ if ($path === '/api/send') {
   $name = $info['role'] === 'guest' ? 'offer.enc' : 'answer.enc';
   $file = room_path($roomHash) . DIRECTORY_SEPARATOR . $name;
   if (is_file($file)) fail('Signal already waiting — переподключитесь снова', 409);
+  slog("SEND role={$info['role']} len=" . strlen($blob) . " room=" . substr($info['room'], 0, 8));
   if (@file_put_contents($file, $blob, LOCK_EX) === false) fail('Storage error', 500);
   touch_room($roomHash);
+  bump_slot($roomHash, $info['role']);
   out_json(['ok' => true]);
+}
+
+/** «живость» слота: обновляем ts, чтобы повторный join не считал участника мёртвым */
+function bump_slot(string $roomHash, string $role): void {
+  $slotsFile = room_slots_path($roomHash);
+  $fp = @fopen($slotsFile, 'c+');
+  if (!$fp) return;
+  flock($fp, LOCK_EX);
+  $raw = stream_get_contents($fp);
+  $slots = json_decode((string)$raw, true);
+  if (is_array($slots)) {
+    $slots[$role] = ['t' => $slots[$role]['t'] ?? '', 'ts' => time()];
+    ftruncate($fp, 0); rewind($fp);
+    fwrite($fp, json_encode($slots));
+  }
+  flock($fp, LOCK_UN); fclose($fp);
 }
 
 /* ---------- /api/get ---------- */
@@ -389,7 +415,9 @@ if ($path === '/api/get') {
   if (!is_file($file)) out_json(['status' => 'wait']);
   $blob = (string)@file_get_contents($file);
   @unlink($file); // одноразовость
+  slog("GET role={$info['role']} len=" . strlen($blob) . " room=" . substr($info['room'], 0, 8));
   touch_room($roomHash ?? $info['room']);
+  bump_slot($info['room'], $info['role']);
   out_json(['status' => 'data', 'blob' => $blob]);
 }
 

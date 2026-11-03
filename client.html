@@ -449,10 +449,10 @@ function waitForMsg(handler, ms){
 function inputsOk(){
   const room = $('inRoom').value.trim();
   const pass = $('inPass').value;
-  if (!room){ setStatus('Укажите номер комнаты', 'err'); return null; }
+  if (!room){ setStatus('Укажите номер комнаты', 'err'); release(); return null; }
   if (room.length < 3 || room.length > 32 || !/^[A-Za-z0-9_-]+$/.test(room))
-    { setStatus('Комната: 3–32 символа (латиница, цифры, - _)', 'err'); return null; }
-  if (pass.length < 4){ setStatus('Пароль: минимум 4 символа', 'err'); return null; }
+    { setStatus('Комната: 3–32 символа (латиница, цифры, - _)', 'err'); release(); return null; }
+  if (pass.length < 4){ setStatus('Пароль: минимум 4 символа', 'err'); release(); return null; }
   return { room, K: sha256hex(utf8('p2p-signaling|' + room + '|' + pass)) };
 }
 
@@ -464,7 +464,7 @@ async function hostRun(){
     const r = await api('/api/join', { room: inp.room });
     state.token = r.token; state.role = 'host';
     await hostCore();
-  } catch (e) { setStatus(e.message, 'err'); }
+  } catch (e) { setStatus(e.message, 'err'); release(); }
   showReconnect();
 }
 
@@ -475,20 +475,21 @@ async function hostCore(){
   const w = await waitForMsg(blob => {
     const plain = blobUnwrap(blob, state.K);
     if (!plain){
-      setStatus('У собеседника другой пароль', 'err');
-      return false; // продолжаем опрос: пусть поправят и переподключатся
+      setStatus('У собеседника другой пароль. Исправьте на обеих сторонах и «Переподключитесь»', 'err');
+      release();
+      return false;
     }
     let msg;
-    try { msg = JSON.parse(plain); } catch { return false; }
+    try { msg = JSON.parse(plain); } catch { release(); return false; }
     (async () => {
       await pc.setRemoteDescription({ type: 'offer', sdp: msg.s });
       await pc.setLocalDescription(await pc.createAnswer());
       await waitIce();
       await api('/api/send', { token: state.token, blob: blobWrap(JSON.stringify({ s: pc.localDescription.sdp, type: 'answer' }), state.K) });
-    })().catch(e => setStatus('Сбой handshake: ' + e.message, 'err'));
+    })().catch(e => { setStatus('Сбой handshake: ' + e.message, 'err'); release(); });
     return true;
   }, 10 * 60 * 1000);
-  if (w.status === 'timeout') setStatus('Второй ПК не подключился. Пере подключитесь или проверьте комнату/пароль', 'err');
+  if (w.status === 'timeout'){ setStatus('Второй ПК не подключился. Проверьте комнату/пароль и «Переподключитесь»', 'err'); release(); }
 }
 
 async function guestRun(){
@@ -511,14 +512,14 @@ async function guestRun(){
     setStatus('Ожидаем ответ хоста…');
     const w = await waitForMsg(blob => {
       const plain = blobUnwrap(blob, state.K);
-      if (!plain){ setStatus('Пароль комнаты не совпал. Проверьте пароль и «Переподключитесь»', 'err'); return false; }
+      if (!plain){ setStatus('Пароль комнаты не совпал. Проверьте пароль и «Переподключитесь»', 'err'); release(); return false; }
       let msg;
-      try { msg = JSON.parse(plain); } catch { return false; }
-      pc.setRemoteDescription({ type: 'answer', sdp: msg.s }).catch(e => setStatus('Сбой handshake: ' + e.message, 'err'));
+      try { msg = JSON.parse(plain); } catch { release(); return false; }
+      pc.setRemoteDescription({ type: 'answer', sdp: msg.s }).catch(e => { setStatus('Сбой handshake: ' + e.message, 'err'); release(); });
       return true;
     }, 10 * 60 * 1000);
-    if (w.status === 'timeout'){ setStatus('Хост не ответил. Возможно, хост у слов. Нажмите «Переподключитесь»', 'err'); }
-  } catch (e) { setStatus(e.message, 'err'); }
+    if (w.status === 'timeout'){ setStatus('Хост не ответил. Проверьте, что хостная страница открыта, и «Переподключитесь»', 'err'); release(); }
+  } catch (e) { setStatus(e.message, 'err'); release(); }
   showReconnect();
 }
 
@@ -538,6 +539,7 @@ function asyncHostGuestRun(){
 function lockInputs(dis){
   ['inServer','inRoom','inPass','btnHost','btnGuest'].forEach(id => $(id).disabled = dis);
 }
+function release(){ if (!ready) lockInputs(false); } // при сбое/таймауте вернуть возможность нажать
 // подставляем адрес только в пустое поле — то, что ввёл пользователь, не трогаем
 if (location.host && !$('inServer').value) $('inServer').value = location.host;
 
