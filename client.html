@@ -484,7 +484,9 @@ const boxItems = new Map();  // id → {id, bytes, ready, size, name, type, nonc
 
 async function refreshBox(){
   const r = await api('/api/box?' + roomQ());
+  const seen = new Set();
   for (const it of (r.list || [])){
+    seen.add(it.id);
     let meta = null;
     const inner = blobUnwrap(it.meta, state.K);
     if (inner){ try { meta = JSON.parse(inner); } catch (e) { meta = null; } }
@@ -493,6 +495,7 @@ async function refreshBox(){
           nonce:meta.nonce, ts:it.ts, ready: it.bytes >= bodyTotal(meta.size), locked:false }
       : { id:it.id, bytes:it.bytes, ts:it.ts, locked:true });
   }
+  for (const id of [...boxItems.keys()]) if (!seen.has(id)) boxItems.delete(id); // удалённые собеседником
   renderBox();
 }
 function renderBox(){
@@ -593,13 +596,22 @@ async function downloadRun(id){
 }
 
 /* ================= ввод файлов ================= */
+/* ВАЖНО: перехват бросания на ВСЁ окно. Firefox без этого открывает брошенный
+   файл как ссылку — страница улетает, все запросы обрываются («aborted») */
+window.addEventListener('dragover', e => { e.preventDefault(); $('drop').classList.add('over'); });
+window.addEventListener('dragleave', e => {
+  if (!e.relatedTarget) $('drop').classList.remove('over');
+});
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  $('drop').classList.remove('over');
+  handleFiles(e.dataTransfer && e.dataTransfer.files);
+});
 $('drop').onclick = () => $('fileInput').click();
 $('fileInput').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
-$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
-$('drop').ondragleave = () => $('drop').classList.remove('over');
-$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('over'); handleFiles(e.dataTransfer.files); };
 function handleFiles(files){
   if (!state.connected){ setStatus('Сначала подключитесь к комнате', 'err'); return; }
+  if (!files || !files.length) return;
   for (const f of files) sendFile(f);
 }
 
