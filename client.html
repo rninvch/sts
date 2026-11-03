@@ -258,12 +258,47 @@ async function fetchSafe(url, init, attempts){
     catch (e) {
       lastErr = e;
       const n = (e && e.name) || '';
+      dlog('net', { st: n, to: String(url).slice(0, 60), msg: String(e.message || '').slice(0, 80) });
       if (n === 'AbortError' || n === 'TypeError') continue;   // мгновенный abort — ещё попытка
       throw e;
     }
   }
   throw lastErr;
 }
+
+/* ---- диагностический журнал клиента → на сервер (/api/log) ---- */
+/* имена файлов в журнал НЕ попадают — только размеры, URLs и имена ошибок */
+const diagBuf = [];
+let diagTimer = null;
+function dlog(ev, extra){
+  const e = { t: Math.round(performance.now() / 1000), ev };
+  if (extra) { try { Object.assign(e, extra); } catch (er) {} }
+  diagBuf.push(e);
+  if (diagBuf.length > 200) diagBuf.splice(0, diagBuf.length - 200);
+  scheduleDiag();
+}
+function scheduleDiag(){ if (!diagTimer && state.connected) diagTimer = setTimeout(deliverDiag, 2500); }
+async function deliverDiag(){
+  diagTimer = null;
+  const events = diagBuf.splice(0, diagBuf.length);
+  if (!events.length) return;
+  try {
+    await fetchSafe(serverBase() + '/api/log', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ room: state.room, ua: navigator.userAgent, events })
+    }, 1);
+  } catch (e) { diagBuf.unshift(...events); }      // не доехало — вернём и повторим позже
+  if (diagBuf.length) scheduleDiag();
+}
+window.addEventListener('beforeunload', () => {
+  if (diagBuf.length && state.connected){
+    try {
+      fetch(serverBase() + '/api/log', { method:'POST', keepalive: true,
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ room: state.room, ua: navigator.userAgent, events: diagBuf }) });
+    } catch (e) {}
+  }
+});
 async function api(path, body){
   const init = body !== undefined
     ? { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) }
@@ -308,6 +343,7 @@ $('btnGo').onclick = async () => {
   } catch (e) { setStatus(e.message, 'err'); return; }
   state.connected = true; state.errs = 0;
   state.room = inp.room; state.K = inp.K;
+  dlog('connect', { room: inp.room.length });
   lockInputs(true);
   $('cardFiles').hidden = false; $('cardBox').hidden = false;
   setStatus('Подключено: хранилище «' + inp.room + '». Перетащите файлы — собеседник скачает из ящика.', 'ok');
@@ -427,6 +463,7 @@ function sendFile(file){
     addBar(id, file.name, false);
   }
   u.st = 'queued';
+  dlog('add', { sz: file.size, csz: u.csz });
   pump();
 }
 function pump(){
@@ -442,6 +479,7 @@ async function uploadRun(u){
   u.t0 = performance.now(); u.pos0 = u.sent;
   const csz = u.csz, step = stepOf(csz);
   let off = u.sent;
+  dlog('upStart', { sz: u.size, csz, from: off, resume: u.metaSent });
   try {
     if (!u.metaSent){
       const meta = blobWrap(JSON.stringify({ name:u.name, type:u.type, size:u.size, nonce:u.nonce, chunk:csz }), state.K);
@@ -483,11 +521,13 @@ async function uploadRun(u){
       updateBar(u.id, u.sent / u.size, speed(u.t0, u.sent - u.pos0));
     }
     u.st = 'done'; nowUploading--;
+    dlog('upDone', { sz: u.size, secs: Math.round((performance.now() - u.t0) / 100)/10 });
     markDone(u.id); setRowNote(u.id, 'готово — собеседник увидит в ящике', false);
     refreshBox().catch(() => {});
     pump();
   } catch (e) {
     u.st = 'fail'; nowUploading = Math.max(0, nowUploading - 1);
+    dlog('upFail', { sz: u.size, at: u.sent, err: (((e && e.name) || '?') + ': ' + ((e && e.message) || '?')).slice(0, 120) });
     updateBar(u.id, u.sent / u.size, '');
     const nm = (e && e.name) ? e.name + ': ' : '';
     setRowNote(u.id, 'ошибка: ' + nm + e.message, true);
@@ -577,6 +617,7 @@ async function downloadRun(id){
   rec.t0 = performance.now(); rec.pos0 = rec.off;
   const csz = it.csz, step = stepOf(csz);
   let off = rec.off;
+  dlog('dlStart', { sz: it.size, csz, from: off });
   try {
     while (off < it.size){
       const len = Math.min(csz, it.size - off);
@@ -609,6 +650,7 @@ async function downloadRun(id){
     let w = 0;
     for (const p of rec.parts){ cipher.set(p, w); w += p.length; }
     const plain = xorBytes(cipher, keystreamAt(state.K, it.nonce, 0, total));
+    dlog('dlDone', { sz: it.size, secs: Math.round((performance.now() - rec.t0) / 100)/10 });
     const blob = new Blob([plain], { type: it.type || 'application/octet-stream' });
     const a = el('a', 'dl');
     a.href = URL.createObjectURL(blob);
@@ -619,6 +661,7 @@ async function downloadRun(id){
     else { a.appendChild(el('div', 'meta')).textContent = ''; $('list').appendChild(a); }
     dls.delete(id);
   } catch (e) {
+    dlog('dlFail', { sz: it.size, at: off, err: (((e && e.name) || '?') + ': ' + ((e && e.message) || '?')).slice(0, 120) });
     updateBar(id, off / it.size, '');
     setRowNote(id, 'ошибка: ' + e.message + ' — нажмите «Скачать» для продолжения', true);
   }

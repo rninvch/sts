@@ -23,6 +23,8 @@
  *  GET  /api/file?room&id&off&len   raw-тело — кусок шифротекста
  *  GET  /api/size?room&id    {bytes}
  *  POST /api/del             {room,id}
+ *  GET  /api/diag            журнал сервера+клиентов (текстовый, для отладки)
+ *  POST /api/log             {room,ua,events[]} — журнал, присылаемый клиентом
  */
 
 declare(strict_types=1);
@@ -104,6 +106,40 @@ header('Access-Control-Allow-Headers: Content-Type');
 header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') { http_response_code(204); exit; }
+
+/* ---------- диагностика: журнал каждого запроса (читается через /api/diag) ---------- */
+
+$DIAG = [];
+
+function diag_note(string $key, $val): void { $GLOBALS['DIAG'][$key] = $val; }
+
+register_shutdown_function(function () {
+  if (!empty($GLOBALS['DIAG_SKIP'])) return;
+  $d = $GLOBALS['DIAG'];
+  $room = isset($d['room']) ? substr(hash('sha256', 'p2p-box|' . $d['room']), 0, 8) : '-';
+  $id   = isset($d['id']) && is_string($d['id']) ? substr($d['id'] . '......', 0, 6) : '-';
+  $q    = '';
+  if (isset($d['off'])) $q .= " off={$d['off']}";
+  if (isset($d['len'])) $q .= " len={$d['len']}";
+  $uri  = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+  $line = implode("\t", [
+    date('Y-m-d H:i:s'),
+    ($_SERVER['REMOTE_ADDR'] ?? '-'),                       // в /api/diag маскируется
+    ($_SERVER['REQUEST_METHOD'] ?? '?') . ' ' . $uri,
+    "room={$room} id={$id}{$q}",
+    'cl=' . (int)($_SERVER['CONTENT_LENGTH'] ?? 0),
+    'recv=' . (isset($d['recv']) ? $d['recv'] : '?'),        // сколько байтов реально дошло
+    'ms=' . (int)((microtime(true) - ($_SERVER['REQUEST_TIME_FLOAT'] ?? 0)) * 1000),
+    'code=' . http_response_code(),
+  ]) . PHP_EOL;
+  $file = state_dir() . DIRECTORY_SEPARATOR . 'diag.log';
+  @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+  if (@filesize($file) > 200000) {                          // журнал не даём расти бесконечно
+    $keep = @file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    @file_put_contents($file, implode("\n", array_slice($keep, -150)) . "\n", LOCK_EX);
+  }
+});
+
 
 /* ---------- утилиты ---------- */
 
@@ -270,12 +306,67 @@ if ($path === '/api/server-info') {
   ]);
 }
 
+/* журнал: отдаёт последние 120 записей без IP и без имён комнат (только их хеши) */
+if ($path === '/api/diag') {
+  $GLOBALS['DIAG_SKIP'] = true;
+  $file = state_dir() . DIRECTORY_SEPARATOR . 'diag.log';
+  $lines = @file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $lines = array_slice($lines, -120);
+  $lines = array_map(static function ($l) {
+    $p = explode("\t", $l);
+    if (count($p) > 1) $p[1] = '<ip>';
+    return implode("\t", $p);
+  }, $lines);
+  /* строки, присланные самим клиентом */
+  $cc = [];
+  foreach (scandir(state_dir()) ?: [] as $f) {
+    if (!str_starts_with($f, 'clog_')) continue;
+    foreach (file(state_dir() . DIRECTORY_SEPARATOR . $f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $l) {
+      $cc[] = $f . "\t" . $l;
+    }
+  }
+  usort($cc, static fn($a, $b) => strncmp(substr($a, 5), substr($b, 5), 8) < 0 ? 1 : -1); // блочно; порядок неважен
+  $cc = array_slice($cc, -80);
+  http_response_code(200);
+  header('Content-Type: text/plain; charset=utf-8');
+  header('Cache-Control: no-store');
+  echo $lines ? implode("\n", $lines) . "\n" : '(журнал сервера пуст)';
+  if ($cc) {
+    echo "---- журнал клиентов (room=<хеш>) ----\n", implode("\n", $cc);
+  }
+  exit;
+}
+
+/* журнал, который присылает сам клиент */
+if ($path === '/api/log' && $method === 'POST') {
+  $raw = file_get_contents('php://input');
+  diag_note('recv', $raw === false ? 'READ_FAIL' : strlen($raw));
+  if ($raw === false) fail('Body expected');
+  if (strlen($raw) > 16384) fail('Too many events', 413);
+  $j = json_decode($raw, true);
+  if (!is_array($j) || !isset($j['events']) || !is_array($j['events'])) fail('Bad log');
+  $roomH = (isset($j['room']) && is_string($j['room']) && preg_match(ROOM_RE, $j['room']))
+         ? substr(room_hash($j['room']), 0, 8) : 'nolog';
+  $ua  = substr(preg_replace('/[^\x20-\x7e]/', '', (string)($j['ua'] ?? '?')), 0, 90);
+  $evLine = json_encode($j['events'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+  if ($evLine === false) $evLine = '[]';
+  $evLine = str_replace(["\r", "\n", "\t"], ' ', $evLine);
+  $file = state_dir() . DIRECTORY_SEPARATOR . 'clog_' . $roomH . '.log';
+  @file_put_contents($file, date('H:i:s') . "\t{$ua}\t{$evLine}\n", FILE_APPEND | LOCK_EX);
+  if (@filesize($file) > 100000) {                    // не даём журнал раздуваться
+    $keep = @file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    @file_put_contents($file, implode("\n", array_slice($keep, -100)) . "\n", LOCK_EX);
+  }
+  out_json(['ok' => true]);
+}
+
 rate_limit_check();
 housekeeping();
 
 /** JSON-тело (для POST, кроме /api/up) */
 function json_body(): array {
   $raw = file_get_contents('php://input');
+  diag_note('recv', $raw === false ? 'READ_FAIL' : strlen($raw));
   if ($raw === false) fail('JSON expected');
   if (strlen($raw) > JSON_MAX) fail('Body too large', 413);
   $body = json_decode($raw, true);
@@ -290,6 +381,8 @@ function room_box(): string {
     $body = json_body();
   }
   $room = $_GET['room'] ?? ($body['room'] ?? '');
+  if (!is_string($room)) diag_note('room', '(не строка)');
+  else diag_note('room', $room);
   if (!is_string($room) || !preg_match(ROOM_RE, $room)) fail('Bad room: 3-32 символа, латиница/цифры/-/_');
   $GLOBALS['__jsonBody'] = $body;
   $dir = box_dir(room_hash($room));
@@ -304,6 +397,7 @@ function room_box(): string {
 if ($path === '/api/up' && $method === 'POST') {
   /* room в query (raw-тело JSON-парсеру не нужно) */
   $room = $_GET['room'] ?? '';
+  diag_note('room', is_string($room) ? $room : '(не строка)');
   if (!is_string($room) || !preg_match(ROOM_RE, $room)) fail('Bad room: 3-32 символа, латиница/цифры/-/_');
   $dir = box_dir(room_hash($room));
   if (!is_dir($dir)) {
@@ -321,6 +415,8 @@ if ($path === '/api/meta' && $method === 'POST') {
   $body = $GLOBALS['__jsonBody'];
   $id = $body['id'] ?? '';
   $meta = $body['meta'] ?? '';
+  diag_note('id', is_string($id) ? $id : '(не строка)');
+  diag_note('metaLen', is_string($meta) ? strlen($meta) : -1);
   if (!is_string($id) || !preg_match(ID_RE, $id)) fail('Bad id');
   if (!is_string($meta) || strlen($meta) < 64 || strlen($meta) > META_MAX) fail('Bad meta');
   $bodyFile = body_path($dir, $id);
@@ -338,11 +434,14 @@ if ($path === '/api/meta' && $method === 'POST') {
 
 if ($path === '/api/up' && $method === 'POST') {
   $id = $_GET['id'] ?? '';
+  diag_note('id', is_string($id) ? $id : '(не строка)');
+  $off = filter_var($_GET['off'] ?? -1, FILTER_VALIDATE_INT);
+  diag_note('off', $off);
   if (!is_string($id) || !preg_match(ID_RE, $id)) fail('Bad id');
   $raw = file_get_contents('php://input');
+  diag_note('recv', $raw === false ? 'READ_FAIL' : strlen($raw));
   if ($raw === false) fail('Body expected');
   if (strlen($raw) > UP_BODY_MAX) fail('Body too large', 413);
-  $off = filter_var($_GET['off'] ?? -1, FILTER_VALIDATE_INT);
   if ($off === false || $off < 0) fail('Bad off');
   $part = body_path($dir, $id);
   $cur = body_size($part);
@@ -384,6 +483,10 @@ if ($path === '/api/box' && $method === 'GET') {
 
 if ($path === '/api/file' && $method === 'GET') {
   $id = $_GET['id'] ?? '';
+  $off = filter_var($_GET['off'] ?? -1, FILTER_VALIDATE_INT);
+  $len = filter_var($_GET['len'] ?? -1, FILTER_VALIDATE_INT);
+  diag_note('id', is_string($id) ? $id : '(не строка)');
+  diag_note('off', $off); diag_note('len', $len);
   if (!is_string($id) || !preg_match(ID_RE, $id)) fail('Bad id');
   $off = filter_var($_GET['off'] ?? -1, FILTER_VALIDATE_INT);
   $len = filter_var($_GET['len'] ?? -1, FILTER_VALIDATE_INT);
@@ -410,6 +513,7 @@ if ($path === '/api/file' && $method === 'GET') {
 
 if ($path === '/api/size' && $method === 'GET') {
   $id = $_GET['id'] ?? '';
+  diag_note('id', is_string($id) ? $id : '(не строка)');
   if (!is_string($id) || !preg_match(ID_RE, $id)) fail('Bad id');
   if (!is_file(meta_path($dir, $id))) fail('No such file', 404);
   out_json(['bytes' => body_size(body_path($dir, $id))]);
