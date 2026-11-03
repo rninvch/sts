@@ -475,6 +475,25 @@ function pump(){
     uploadRun(next).catch(e => uploadFail(next, e));
   }
 }
+/* Firefox на Ubuntu иногда мгновенно рвёт blob.arrayBuffer() (AbortError) —
+   тогда повторяем и переключаемся на запасной FileReader */
+async function readSlice(file, off, len){
+  const blob = file.slice(off, off + len);
+  for (let i = 0; i < 2; i++){
+    try { return new Uint8Array(await blob.arrayBuffer()); }
+    catch (e) { dlog('fileReadAbort', { attempt: i + 1, st: e.name }); await sleep(150); }
+  }
+  return await new Promise((res, rej) => {
+    try {
+      const fr = new FileReader();
+      fr.onerror = () => rej(new Error('Файл не читается: ' + fr.error));
+      fr.onload = () => res(new Uint8Array(fr.result));
+      fr.onabort = () => rej(new Error('fileRead: abort'));
+      fr.readAsArrayBuffer(blob);
+    } catch (e) { rej(e); }
+  });
+}
+
 async function uploadRun(u){
   u.t0 = performance.now(); u.pos0 = u.sent;
   const csz = u.csz, step = stepOf(csz);
@@ -492,9 +511,11 @@ async function uploadRun(u){
     }
     while (off < u.size){
       if (!state.connected) throw new Error('соединение прервано');
+      u.stage = 'read';
       const len = Math.min(csz, u.size - off);
       const bodyOff = Math.floor(off / csz) * step;
-      const plain = new Uint8Array(await u.file.slice(off, off + len).arrayBuffer());
+      const plain = await readSlice(u.file, off, len);   // Firefox рвёт arrayBuffer → файл-фолбэк
+      u.stage = 'post';
       const ct = xorBytes(plain, keystreamAt(state.K, u.nonce, off, len));
       const tagHex = sha256hex(state.K + '|' + u.nonce + '|' + off + '|' + latin1(ct));
       const tagB = new Uint8Array(TAGB);
@@ -527,7 +548,7 @@ async function uploadRun(u){
     pump();
   } catch (e) {
     u.st = 'fail'; nowUploading = Math.max(0, nowUploading - 1);
-    dlog('upFail', { sz: u.size, at: u.sent, err: (((e && e.name) || '?') + ': ' + ((e && e.message) || '?')).slice(0, 120) });
+    dlog('upFail', { sz: u.size, at: u.sent, stage: u.stage || '-', err: (((e && e.name) || '?') + ': ' + ((e && e.message) || '?')).slice(0, 120) });
     updateBar(u.id, u.sent / u.size, '');
     const nm = (e && e.name) ? e.name + ': ' : '';
     setRowNote(u.id, 'ошибка: ' + nm + e.message, true);
