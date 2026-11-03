@@ -2,84 +2,93 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>P2P файлы — protected signaling</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Обмен файлами — защищённый «FTP» на чистом JS/PHP</title>
 <style>
-  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --acc:#38bdf8; --txt:#e2e8f0; --dim:#94a3b8; }
-  * { box-sizing:border-box; margin:0; }
-  body { font-family:system-ui,Segoe UI,sans-serif; background:var(--bg); color:var(--txt);
-         display:flex; justify-content:center; padding:24px 12px; }
-  .wrap { width:100%; max-width:720px; }
-  h1 { font-size:1.3rem; margin-bottom:4px; }
-  .sub { color:var(--dim); font-size:.85rem; margin-bottom:18px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:14px; }
-  .card h2 { font-size:.95rem; margin-bottom:10px; color:var(--acc); }
-  label { display:block; font-size:.75rem; color:var(--dim); margin:10px 0 4px; }
-  input { width:100%; background:#0b1220; color:var(--txt); border:1px solid var(--line); border-radius:8px;
-          padding:9px 10px; font-size:.9rem; }
-  .row { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center; }
-  button { background:var(--acc); color:#0b1220; border:0; border-radius:8px; padding:9px 16px;
-           font-weight:600; cursor:pointer; font-size:.85rem; }
-  button:disabled { opacity:.4; cursor:default; }
-  button.ghost { background:transparent; color:var(--acc); border:1px solid var(--acc); }
-  .status { font-size:.8rem; color:var(--dim); margin-top:10px; min-height:1.2em; }
-  .status.ok { color:#4ade80; } .status.err { color:#f87171; }
-  #drop { border:2px dashed var(--line); border-radius:12px; padding:26px; text-align:center;
-          color:var(--dim); cursor:pointer; transition:.15s; }
-  #drop.over { border-color:var(--acc); color:var(--acc); background:rgba(56,189,248,.05); }
-  input[type=file] { display:none; }
-  .tx { margin-top:10px; display:flex; align-items:center; gap:10px; font-size:.8rem; }
-  .bar { flex:1; height:8px; background:var(--line); border-radius:4px; overflow:hidden; min-width:60px; }
-  .bar > div { height:100%; width:0; background:var(--acc); transition:width .2s; }
-  .bar.recv > div { background:#4ade80; }
-  .meta { min-width:180px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .speed { color:var(--dim); min-width:140px; text-align:right; }
-  a.dl { color:#4ade80; font-weight:600; }
-  details { margin-top:8px; }
-  summary { cursor:pointer; color:var(--dim); font-size:.8rem; }
-  .hint { font-size:.75rem; color:var(--dim); margin-top:8px; line-height:1.5; }
+:root { --bg:#0f1420; --card:#171e2e; --line:#26304a; --tx:#dbe4f3; --dim:#7e8aa6; --ok:#34d399; --err:#f87171; --acc:#5b9dff; }
+* { box-sizing:border-box; }
+body { margin:0; font:15px/1.45 system-ui,'Segoe UI',sans-serif; background:var(--bg); color:var(--tx); }
+.wrap { max-width:720px; margin:0 auto; padding:20px 14px 60px; }
+h1 { font-size:1.35rem; margin:.2em 0 .1em; }
+h2 { font-size:1.05rem; margin:.1em 0 .6em; }
+.sub { color:var(--dim); font-size:.85rem; margin-bottom:14px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+label { display:block; font-size:.8rem; color:var(--dim); margin:10px 0 4px; }
+input { width:100%; background:#0c1119; color:var(--tx); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font-size:.95rem; }
+button { background:var(--acc); color:#081020; border:0; border-radius:8px; padding:9px 14px; font-size:.95rem; font-weight:600; cursor:pointer; }
+button.ghost { background:transparent; color:var(--tx); border:1px solid var(--line); font-weight:400; }
+button:disabled { opacity:.45; cursor:default; }
+button.dl { padding:5px 10px; font-size:.8rem; }
+.row { display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
+.status { min-height:1.4em; margin-top:10px; font-size:.9rem; color:var(--dim); }
+.ok { color:var(--ok); } .err { color:var(--err); }
+.hint { font-size:.75rem; color:var(--dim); margin-top:8px; line-height:1.5; }
+.hint code { color:var(--tx); }
+#drop { border:2px dashed var(--line); border-radius:10px; padding:22px; text-align:center; color:var(--dim); cursor:pointer; }
+#drop.over { border-color:var(--acc); color:var(--acc); }
+#list { margin-top:12px; }
+.tx { padding:8px 0; border-bottom:1px solid var(--line); }
+.meta { font-size:.9rem; margin-bottom:5px; word-break:break-all; }
+.bar { height:8px; background:#0c1119; border-radius:5px; overflow:hidden; }
+.bar > div { height:100%; width:0; background:var(--acc); border-radius:5px; transition:width .15s; }
+.speed { font-size:.75rem; color:var(--dim); margin-top:4px; }
+.speed.err { color:var(--err); }
+a.dl { color:var(--ok); font-size:.9rem; text-decoration:none; }
+table.box { width:100%; border-collapse:collapse; font-size:.88rem; }
+table.box td, table.box th { padding:7px 6px; border-bottom:1px solid var(--line); text-align:left; }
+table.box th { color:var(--dim); font-weight:500; font-size:.78rem; }
+td.acts { white-space:nowrap; text-align:right; }
+td.acts button { margin-left:6px; }
+.prt { color:var(--dim); font-size:.75rem; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>P2P передача файлов</h1>
-  <div class="sub">Файлы идут напрямую между ПК. Сервер видит только шифрованный «пакет знакомства» — без пароля.</div>
+  <h1>Обмен файлами</h1>
+  <div class="sub">Работает как FTP: оба ПК вводят одинаковую комнату и пароль — получают общее хранилище.
+    Загружайте с любой стороны, вторая скачает из списка. Файлы шифруются в браузере — сервер хранит
+    только непрозрачные байты.</div>
   <div id="srvAddrs" class="hint" hidden></div>
 
   <div class="card">
-    <h2>Шаг 1 — защищённое соединение</h2>
-    <label>Сервер-«сваха» (IP запустившего <code>server.php</code>, порт опционален)</label>
-    <input id="inServer" placeholder="192.168.1.10 или 192.168.1.10:8080">
-    <label>Номер комнаты (3–32 символа) </label>
+    <h2>Подключение</h2>
+    <label>Адрес сервера (IP запустившего <code>server.php</code>, порт опционален)</label>
+    <input id="inServer" placeholder="83.220.174.88" spellcheck="false">
+    <label>Номер комнаты (одинаковый на обоих ПК, 3–32 символа)</label>
     <input id="inRoom" placeholder="my-room-01">
-    <label>Пароль комнаты (не отправляется на сервер)</label>
+    <label>Пароль комнаты (не отправляется на сервер; одинаковый на обоих ПК)</label>
     <input id="inPass" type="password" placeholder="секрет">
     <div class="row">
-      <button id="btnHost">Создать комнату</button>
-      <button id="btnGuest">Подключиться к комнате</button>
-      <button id="btnRe" class="ghost" hidden>Переподключиться</button>
+      <button id="btnGo">Подключиться</button>
     </div>
     <div id="statusConn" class="status"></div>
-    <div class="hint">Обе стороны могут как отправлять, так и получать файлы. Если связь оборвалась —
-      нажмите «Переподключиться» на <b>обоих</b> ПК: незавершённые передачи продолжатся с места обрыва.</div>
+    <div class="hint">Очередность не важна: оба ПК равноправны. Обрыв связи — нажмите «Подключиться»
+      снова: незавершённая загрузка продолжится с места обрыва.</div>
   </div>
 
   <div class="card" id="cardFiles" hidden>
-    <h2>Шаг 2 — файлы</h2>
+    <h2>Отправить на другой ПК</h2>
     <div id="drop">Перетащите файлы сюда или нажмите, чтобы выбрать</div>
-    <input type="file" id="fileInput" multiple>
+    <input type="file" id="fileInput" multiple hidden>
     <div id="list"></div>
-    <div class="row"><button id="btnClear" class="ghost">Отменить незавершённые</button></div>
+    <div class="row"><button id="btnClear" class="ghost">Убрать завершённые строки</button></div>
+  </div>
+
+  <div class="card" id="cardBox" hidden>
+    <h2>Ящик (общее хранилище)</h2>
+    <table class="box"><thead><tr><th>Файл</th><th>Размер</th><th>Статус</th><th></th></tr></thead>
+      <tbody id="boxBody"><tr><td colspan="4" class="prt">пусто</td></tr></tbody></table>
   </div>
 
   <details class="card">
     <summary>Защита и как это работает</summary>
-    <div class="status" id="secInfo">
-      Веб-страница общается с сервером по HTTP: пик каждого запроса зашифрован ключом SHA-256(комната+пароль),
-      подписан тегом и не читается на сервере. Пароль никуда не уходи́т. Файлы передаются прямо между браузерами
-      (AES/DTLS внутри WebRTC). Для защиты от прослушки канала (MITM) достаточно знать, что содержимое комнаты
-      зашифровано; серверу же можно доверять, ведь он только пересылает блобы.
-      <br>ICE: STUN Google + TURN openrelay (для сетей со строгим NAT).
+    <div class="status">
+      Транспорт — обычный HTTP: TCP идёт В СТОРОНУ сервера, поэтому работает через любой NAT и CGNAT,
+      без пробросов портов и всяких внешних компонентов. Файл режется на куски 512 КБ; при загрузке
+      каждый кусок сразу сохраняется вместе со своим тегом целостности. Тег и кусок шифруются в
+      браузере ключом SHA-256(комната|пароль) — сервер не знает пароль и не видит имена файлов.
+      Скачивание проверяет тег каждого куска, рвёт связи — но продолжает с последнего целого куска.
+      Двустороннее докачивание внутри сессии.
     </div>
   </details>
 </div>
@@ -146,450 +155,176 @@ function sha256hex(str){ // str: latin1 (все коды < 256)
   return out;
 }
 
-/* ================= Шифрование блобов (ключ из комнаты+пароля) ================= */
-/* Блоб: {v:1, n:nonce, d:b64(xor(SDP, поток из SHA-256)), t:sha256(K|n|d)} */
+/* ============ шифрование: ключ = SHA-256(utf8('p2p-box|'+room+'|'+pass)) ============ */
 function utf8(s){ return unescape(encodeURIComponent(s)); }
 function deutf8(s){ return decodeURIComponent(escape(s)); }
-
-function keystream(K, n, len){
+function nonceHex(bytes){ return [...crypto.getRandomValues(new Uint8Array(bytes))]
+  .map(b => b.toString(16).padStart(2,'0')).join(''); }
+function latin1(u8){
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000)
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return s;
+}
+function hex32(u8){ // первые 32 байта sha256hex уже есть — не нужен
+  let r = '';
+  for (let i = 0; i < u8.length; i++) r += (u8[i] >> 4 ? u8[i].toString(16) : '0' + u8[i].toString(16));
+  return r;
+}
+const KB = 31; // байт SHA-256-потока на один хеш-блок
+function keystreamAt(K, n, offset, len){
   const out = new Uint8Array(len);
-  let filled = 0, idx = 0;
+  let filled = 0, blockIdx = Math.floor(offset / KB), skip = offset % KB;
   while (filled < len){
-    const h = sha256hex(K + '|' + n + '|' + idx.toString(36));
-    for (let j = 0; j < 62 && filled < len; j += 2)
-      out[filled++] = parseInt(h.slice(j, j + 2), 16);
-    idx++;
+    const h = sha256hex(K + '|' + n + '|' + blockIdx.toString(36));
+    for (let j = skip*2; j < 62 && filled < len; j += 2)
+      out[filled++] = parseInt(h.substr(j, 2), 16);
+    skip = 0; blockIdx++;
   }
   return out;
+}
+function xorBytes(bytes, ks){
+  const out = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) out[i] = bytes[i] ^ ks[i];
+  return out;
+}
+function blobWrap(plain, K){
+  const n = nonceHex(16);
+  const raw = utf8(plain);
+  const d = btoa(xorStr(raw, keystreamAt(K, n, 0, raw.length)));
+  return JSON.stringify({ v:1, n, d, t: sha256hex(K + '|' + n + '|' + d) });
 }
 function xorStr(s, ks){
   let r = '';
   for (let i = 0; i < s.length; i++) r += String.fromCharCode(s.charCodeAt(i) ^ ks[i]);
   return r;
 }
-function blobWrap(plain, K){
-  const n = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2,'0')).join('');
-  const d = btoa(xorStr(utf8(plain), keystream(K, n, utf8(plain).length)));
-  return JSON.stringify({ v:1, n, d, t: sha256hex(K + '|' + n + '|' + d) });
-}
 function blobUnwrap(blob, K){
   try {
     const b = JSON.parse(blob);
-    if (!b || b.v !== 1 || !/^[0-9a-f]{32}$/.test(b.n) || typeof b.d !== 'string' || b.t !== sha256hex(K + '|' + b.n + '|' + b.d))
-      return null;
+    if (!b || b.v !== 1 || !/^[0-9a-f]{32}$/.test(b.n) || typeof b.d !== 'string'
+        || b.t !== sha256hex(K + '|' + b.n + '|' + b.d)) return null;
     const raw = atob(b.d);
-    const ks = keystream(K, b.n, raw.length);
-    return deutf8(xorStr(raw, ks));
+    return deutf8(xorStr(raw, keystreamAt(K, b.n, 0, raw.length)));
   } catch (e) { return null; }
 }
 
-/* ================= Конфигурация связи ================= */
-const ICE = {
-  iceServers: [
-    { urls: ['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302'] },
-    { urls: [
-        'turn:openrelay.metered.ca:80',
-        'turn:openrelay.metered.ca:443',
-        'turn:openrelay.metered.ca:443?transport=tcp'
-      ], username: 'openrelayproject', credential: 'openrelayproject' }
-  ]
-};
-
+/* ================= утилиты ================= */
 const $ = id => document.getElementById(id);
-let pc = null, dc = null, ready = false;
-let state = { token:null, role:null, K:null, room:'', polling:false, hadConnect:false };
-
-function setStatus(text, cls){ const s = $('statusConn'); s.textContent = text; s.className = 'status' + (cls ? ' ' + cls : ''); }
 function el(tag, cls){ const e = document.createElement(tag); if (cls) e.className = cls; return e; }
-function human(b){ return b<1024 ? b+' Б' : b<1048576 ? (b/1024).toFixed(1)+' КБ' : b<1073741824 ? (b/1048576).toFixed(1)+' МБ' : (b/1073741824).toFixed(2)+' ГБ'; }
-function speed(t0, bytes){ const dt = (performance.now()-t0)/1000; return bytes > 0 && dt > 0.3 ? human(bytes/dt)+'/с' : ''; }
-function hash32(s){ // хеш id файла: FNV-1a
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
+function human(n){
+  if (n < 1024) return n + ' Б';
+  for (const [v, u] of [[1073741824,'ГБ'], [1048576,'МБ'], [1024,'КБ']])
+    if (n >= v) return (n/v).toFixed(n/v < 10 ? 1 : 0) + ' ' + u;
+  return n + ' Б';
 }
+function speed(t0, bytes){
+  const dt = (performance.now() - t0) / 1000;
+  return dt > 0.4 ? human(bytes/dt) + '/с' : '…';
+}
+function tsAgo(ts){
+  const m = Math.max(0, Math.round((Date.now()/1000 - ts)/60));
+  if (m < 1) return 'только что';
+  if (m < 60) return m + ' мин назад';
+  const h = Math.round(m/60);
+  if (h < 24) return h + ' ч назад';
+  return Math.round(h/24) + ' дн назад';
+}
+function esc(s){ const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+function setStatus(text, cls){ const s = $('statusConn'); s.textContent = text; s.className = 'status' + (cls ? ' ' + cls : ''); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/* ================= API сервера ================= */
+/* ================= HTTP-клиент ================= */
+const state = { connected:false, room:'', K:'', pollTimer:null, errs:0 };
 function serverBase(){
   let v = ($('inServer').value || '').trim();
   if (!v) v = location.host;
   if (!v) throw new Error('Укажите адрес сервера');
-  const base = /^https?:\/\//.test(v) ? v.replace(/\/+$/, '') : 'http://' + v.replace(/\/+$/, '');
+  const base = /^https?:\/\//i.test(v) ? v.replace(/\/+$/, '') : 'http://' + v.replace(/\/+$/, '');
   if (!/^https?:\/\/.+/i.test(base)) throw new Error('Некорректный адрес: ' + v);
   return base;
 }
+function roomQ(){ return 'room=' + encodeURIComponent(state.room); }
 async function api(path, body){
   const init = body !== undefined
     ? { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) }
-    : undefined;
+    : undefined;                      // без тела — GET
   let res;
-  let url = serverBase() + path;
+  const url = serverBase() + path;
   try { res = await fetch(url, init); }
   catch (e) { throw new Error('Сервер недоступен: ' + url); }
   const j = await res.json().catch(() => null);
-  if (!res.ok) throw new Error((j && j.error) || ('HTTP ' + res.status));
+  if (!res.ok || !j || j.error) throw new Error((j && j.error) || ('HTTP ' + res.status));
   return j;
 }
-
-/* ================= Протокол канала (внутри WebRTC, сервер не видит) =================
-   '!{json}'   заголовок файла {id,name,size,type}
-   '!s <hash>' «чанки ниже принадлежат файлу с этим хешем» — для параллельной передачи
-   '!end!<id>' файл передан полностью
-   '!rsq[...]' запрос возобновления недополученных файлов
-   '!cls'      отмена незавершённых
-   чанки файла — бинарные куски по 16 КБ                                        */
-
-function createPC(){
-  pc = new RTCPeerConnection(ICE);
-  pc.onconnectionstatechange = () => {
-    const s = pc.connectionState;
-    if (s === 'connected') setStatus('Связь установлена…');
-    else if (s === 'failed') setStatus('Не удалось соединиться (NAT). Нажмите «Переподключиться» на обоих ПК', 'err');
-    else if (s === 'disconnected')
-      { ready = false; setStatus('Связь оборвалась. Нажмите «Переподключиться» на обоих ПК', 'ok'); showReconnect(); }
-    else if (s === 'closed'){ ready = false; setStatus('Соединение закрыто'); showReconnect(); }
-  };
-  return pc;
-}
-
-function wireChannel(ch){
-  dc = ch;
-  ch.binaryType = 'arraybuffer';
-  ch.onopen = () => {
-    ready = true; state.hadConnect = true; showReconnect();
-    setStatus('Соединение установлено — можно передавать файлы', 'ok');
-    unlockUI();
-    setTimeout(() => { // возобновление недополученного
-      if (dc === ch && ready && incoming.size){
-        dc.send('!rsq' + JSON.stringify([...incoming.values()].map(s => ({
-          id: s.m.id, name: s.m.name, size: s.m.size, type: s.m.type, got: s.got
-        }))));
-      }
-    }, 300);
-  };
-  ch.onclose = () => { ready = false; setStatus('Канал закрыт', 'err'); showReconnect(); };
-  ch.onerror  = () => { ready = false; setStatus('Ошибка канала', 'err'); };
-  ch.onmessage = onMsg;
-}
-
-/* ================= Приём файлов ================= */
-const incoming = new Map();  // id → {m, parts, got, startGot, t0}
-const byHash   = new Map();  // hash32(id) → state
-let cur = null;
-
-function onMsg(e){
-  const d = e.data;
-  if (typeof d === 'string'){
-    if (d.startsWith('!{')){
-      const m = JSON.parse(d.slice(1));
-      let st = incoming.get(m.id);
-      if (!st){
-        st = { m, parts: [], got: 0, startGot: 0, t0: performance.now() };
-        incoming.set(m.id, st);
-        byHash.set(hash32(m.id), st);
-        addBar(m.id, m.name, true);
-      }
-      st.t0 = performance.now(); st.startGot = st.got;
-      cur = st;
-    } else if (d.startsWith('!s ')){
-      cur = byHash.get(parseInt(d.slice(3), 10)) || null;
-    } else if (d.startsWith('!end!')){
-      const st = incoming.get(d.slice(5));
-      if (st) finishSink(st);
-      if (st && cur === st) cur = null;
-    } else if (d.startsWith('!rsq')){
-      handleResumeRequest(JSON.parse(d.slice(4)));
-    } else if (d === '!cls'){
-      clearPending(false);
-    }
-    return;
+async function apiRaw(path, bytes){
+  let res;
+  const url = serverBase() + path;
+  try {
+    res = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/octet-stream' }, body: bytes });
+  } catch (e) { throw new Error('Сервер недоступен: ' + url); }
+  if (!res.ok){
+    const j = await res.json().catch(() => null);
+    throw new Error((j && j.error) || ('HTTP ' + res.status));
   }
-  if (!cur) return;
-  const b = d.size ?? d.byteLength ?? 0;
-  cur.parts.push(d);
-  cur.got += b;
-  updateBar(cur.m.id, cur.got / cur.m.size, speed(cur.t0, cur.got - cur.startGot));
+  return res.json();
 }
 
-function finishSink(st){
-  incoming.delete(st.m.id);
-  byHash.delete(hash32(st.m.id));
-  const blob = new Blob(st.parts, { type: st.m.type || 'application/octet-stream' });
-  const a = el('a', 'dl');
-  a.href = URL.createObjectURL(blob);
-  a.download = st.m.name;
-  a.textContent = 'Скачать ' + st.m.name + ' (' + human(blob.size) + ')';
-  const row = document.querySelector(`[data-f="${st.m.id}"]`);
-  if (row) row.querySelector('.bar').replaceWith(a);
-  if (cur === st) cur = null;
-}
-
-function clearPending(notify){
-  if (notify && dc && dc.readyState === 'open') dc.send('!cls');
-  for (const st of incoming.values()){
-    const row = document.querySelector(`[data-f="${st.m.id}"]`);
-    if (row) row.remove();
-  }
-  incoming.clear(); byHash.clear(); cur = null;
-}
-
-/* ================= Отправка (до 2 файлов параллельно, батчами по 512 КБ) ================= */
-const CHUNK = 16 * 1024, BATCH = 32, HIGH = 1 << 20, MAX_ACTIVE = 2;
-let jobs = [];           // {id, file, pos, pos0, t0, done}
-let ticking = false;
-const fileByRef = new Map(); // 'name:size' → File
-
-function sendFile(file){
-  fileByRef.set(file.name + ':' + file.size, file);
-  const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  addBar(id, file.name, false);
-  dc.send('!' + JSON.stringify({ id, name:file.name, size:file.size, type:file.type }));
-  jobs.push({ id, file, pos:0, pos0:0, t0:performance.now(), done:false });
-  kick();
-}
-function handleResumeRequest(list){
-  for (const r of list){
-    const file = fileByRef.get(r.name + ':' + r.size);
-    if (!file) continue;
-    addBar(r.id, r.name + ' (возобновление)', false);
-    dc.send('!' + JSON.stringify({ id:r.id, name:r.name, size:r.size, type:r.type }));
-    jobs.push({ id:r.id, file, pos:r.got, pos0:r.got, t0:performance.now(), done:false });
-  }
-  kick();
-}
-function kick(){ if (!ticking){ ticking = true; loop(); } }
-function loop(){
-  if (!dc || dc.readyState !== 'open'){ ticking = false; return; }
-  if (dc.bufferedAmount > HIGH){ setTimeout(loop, 20); return; }
-  const act = jobs.filter(j => !j.done);
-  if (!act.length){ ticking = false; jobs = jobs.filter(j => !j.done); return; }
-  for (const j of act.slice(0, MAX_ACTIVE)){
-    if (j.pos >= j.file.size){ j.done = true; continue; }
-    dc.send('!s ' + hash32(j.id));
-    for (let i = 0; i < BATCH && j.pos < j.file.size; i++){
-      dc.send(j.file.slice(j.pos, j.pos + CHUNK));
-      j.pos += CHUNK;
-    }
-    updateBar(j.id, j.pos / j.file.size, speed(j.t0, j.pos - j.pos0));
-    if (j.pos >= j.file.size){
-      dc.send('!end!' + j.id);
-      markDone(j.id, j.file, j.t0, j.pos0);
-      j.done = true;
-    }
-  }
-  setTimeout(loop, dc.bufferedAmount > (HIGH >> 1) ? 20 : 0);
-}
-
-/* ================= Прогресс ================= */
-function addBar(id, name, isRecv){
-  const old = document.querySelector(`[data-f="${id}"]`);
-  if (old){ if (name) old.querySelector('.meta').textContent = name; return; }
-  const row = el('div', 'tx'); row.dataset.f = id;
-  const meta = el('div', 'meta'); meta.textContent = name;
-  const bar = el('div', 'bar' + (isRecv ? ' recv' : '')); bar.appendChild(el('div'));
-  row.append(meta, bar, el('div', 'speed'));
-  $('list').appendChild(row);
-}
-function updateBar(id, frac, sp){
-  const row = document.querySelector(`[data-f="${id}"]`); if (!row) return;
-  row.querySelector('.bar > div').style.width = Math.min(100, Math.floor(frac * 100)) + '%';
-  if (sp !== undefined) row.querySelector('.speed').textContent = sp;
-}
-function markDone(id, file, t0, pos0){
-  const row = document.querySelector(`[data-f="${id}"]`); if (!row) return;
-  row.querySelector('.bar > div').style.width = '100%';
-  const dt = (performance.now() - t0) / 1000, sent = file.size - pos0;
-  row.querySelector('.speed').textContent = human(file.size) + (dt > 0 && sent > 0 ? ' · ' + human(sent/dt)+'/с' : '');
-}
-
-/* ================= UI-обвязка ================= */
-function unlockUI(){ $('cardFiles').hidden = false; }
-function showReconnect(){ $('btnRe').hidden = !state.hadConnect; }
-$('drop').onclick = () => $('fileInput').click();
-$('fileInput').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
-$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
-$('drop').ondragleave = () => $('drop').classList.remove('over');
-$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('over'); handleFiles(e.dataTransfer.files); };
-function handleFiles(files){
-  if (!ready){ setStatus('Сначала установите соединение', 'err'); return; }
-  for (const f of files) sendFile(f);
-}
-$('btnClear').onclick = () => clearPending(true);
-
-/* ================= Сигналинг через сервер ================= */
-function candCount(desc){ return desc && desc.sdp ? (desc.sdp.match(/a=candidate/g) || []).length : 0; }
-
-function waitIce(){
-  /* ждём сбор ICE-кандидатов (максимум 6 с), возвращаем сколько собрали */
-  return new Promise(res => {
-    let n = candCount(pc.localDescription);
-    const done = () => res(n);
-    if (pc.iceGatheringState === 'complete') return done();
-    pc.onicecandidate = e => {
-      if (e.candidate){ n++; if (n === 1) setStatus('Ищем путь до собеседника (ICE)…'); }
-      else done();                    // null-кандидат = сбор завершён
-    };
-    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') done(); };
-    setTimeout(done, 6000);
-  });
-}
-
-/* watchdog: если после handshake связь так и не открылась — сказать об этом вслух */
-let dogTimer = null;
-function connWatchdog(){
-  clearInterval(dogTimer);
-  const t0 = Date.now();
-  dogTimer = setInterval(() => {
-    if (ready){ clearInterval(dogTimer); return; }
-    if (!pc){ clearInterval(dogTimer); return; }
-    const cs = pc.connectionState || 'new';
-    if (cs === 'connected') return;            // ждём onopen канала
-    const lc = candCount(pc.localDescription), rc = candCount(pc.remoteDescription);
-    if (Date.now() - t0 > 25000){
-      clearInterval(dogTimer);
-      if (lc === 0 && rc === 0)
-        setStatus('Не найдено ни одного ICE-кандидата. Обычно это блокировка WebRTC (файрвол/антивирус/расширение браузера). Нажмите «Переподключиться» на обоих ПК', 'err');
-      else
-        setStatus('Не удалось пробить NAT (' + cs + ', ICE ' + (pc.iceConnectionState || '?') +
-          '; мои кандидаты: ' + lc + ', собеседника: ' + rc + '). Нажмите «Переподключиться» на обоих ПК; ' +
-          'для проверки попробуйте другую сеть (например, мобильный интернет)', 'err');
-      showReconnect();
-    } else if (Date.now() - t0 > 0){
-      setStatus('Устанавливаем связь: WebRTC ' + cs + ', ICE ' + (pc.iceConnectionState || '?') + '…');
-    }
-  }, 2500);
-}
-function stopPolling(){ state.polling = false; }
-
-function waitForMsg(handler, ms){
-  // опрос каждые 1 с до ms мс или отмены
-  state.polling = true;
-  const t0 = Date.now();
-  return new Promise(resolve => {
-    (async function poll(){
-      if (!state.polling) return resolve({ status:'cancel' });
-      if (Date.now() - t0 > ms) return resolve({ status:'timeout' });
-      try {
-        const r = await api('/api/get?token=' + encodeURIComponent(state.token));
-        if (r.status === 'data'){
-          const verdict = await handler(r.blob);   // ждём и sync-, и async-обработчик
-          if (verdict) return resolve({ status:'ok' });
-          return resolve({ status:'bad' });        // неверный ключ
-        }
-      } catch (e) { setStatus('Опрос прерван: ' + e.message, 'err'); stopPolling(); return resolve({ status:'fail' }); }
-      setTimeout(poll, 1000);
-    })();
-  });
-}
-
+/* ================= подключение ================= */
 function inputsOk(){
   const room = $('inRoom').value.trim();
   const pass = $('inPass').value;
-  if (!room){ setStatus('Укажите номер комнаты', 'err'); release(); return null; }
+  if (!room){ setStatus('Укажите номер комнаты', 'err'); return null; }
   if (room.length < 3 || room.length > 32 || !/^[A-Za-z0-9_-]+$/.test(room))
-    { setStatus('Имя комнаты («Номер комнаты», а не пароль): только латиница, цифры, - _ ; без пробелов и русских букв, 3–32 символа. Сейчас введено: «' + room + '»', 'err'); release(); return null; }
-  if (pass.length < 4){ setStatus('Пароль: минимум 4 символа', 'err'); release(); return null; }
-  return { room, K: sha256hex(utf8('p2p-signaling|' + room + '|' + pass)) };
+    { setStatus('Имя комнаты: только латиница, цифры, - _ ; без пробелов и русских букв, 3–32 символа. Введено: «' + room + '»', 'err'); return null; }
+  if (pass.length < 4){ setStatus('Пароль: минимум 4 символа', 'err'); return null; }
+  return { room, K: sha256hex(utf8('p2p-box|' + room + '|' + pass)) };
 }
-
-async function hostRun(){
-  stopPolling();
+$('btnGo').onclick = async () => {
+  state.connected = false;
+  clearTimeout(state.pollTimer);
   const inp = inputsOk(); if (!inp) return;
-  state.K = inp.K; state.room = inp.room;
   try {
-    const r = await api('/api/join', { room: inp.room });
-    state.token = r.token; state.role = 'host';
-    await hostCore();
-  } catch (e) { setStatus(e.message, 'err'); release(); }
-  showReconnect();
-}
-
-async function hostCore(){
-  setStatus('Комната «' + state.room + '» создана. Ожидаем второй ПК…');
-  createPC();
-  wireChannel(pc.createDataChannel('files'));
-  const w = await waitForMsg(blob => {
-    const plain = blobUnwrap(blob, state.K);
-    if (!plain){
-      setStatus('У собеседника другой пароль. Исправьте на обеих сторонах и «Переподключитесь»', 'err');
-      release();
-      return false;
-    }
-    let msg;
-    try { msg = JSON.parse(plain); } catch { release(); return false; }
-    (async () => {
-      await pc.setRemoteDescription({ type: 'offer', sdp: msg.s });
-      await pc.setLocalDescription(await pc.createAnswer());
-      const cands = await waitIce();
-      setStatus('Ответ отправлен (кандидатов: ' + cands + '). Устанавливаем связь…');
-      await api('/api/send', { token: state.token, blob: blobWrap(JSON.stringify({ s: pc.localDescription.sdp, type: 'answer' }), state.K) });
-      connWatchdog();
-    })().catch(e => { setStatus('Сбой handshake: ' + e.message, 'err'); release(); });
-    return true;
-  }, 10 * 60 * 1000);
-  if (w.status === 'timeout'){ setStatus('Второй ПК не подключился. Проверьте комнату/пароль и «Переподключитесь»', 'err'); release(); }
-}
-
-async function guestRun(){
-  stopPolling();
-  const inp = inputsOk(); if (!inp) return;
-  state.K = inp.K; state.room = inp.room;
-  try {
-    const r = await api('/api/join', { room: inp.room });
-    state.token = r.token; state.role = r.role;
-    setStatus('Подключаемся к комнате «' + inp.room + '»…');
-    if (r.role === 'host'){ // комната была пуста — автоматически становимся хостом
-      setStatus('Комната была пуста — вы автоматически стали хостом. Ожидаем второй ПК…');
-      return void await hostCore();
-    }
-    createPC();
-    pc.ondatachannel = e => wireChannel(e.channel);
-    await pc.setLocalDescription(await pc.createOffer());
-    await waitIce();
-    await api('/api/send', { token: state.token, blob: blobWrap(JSON.stringify({ s: pc.localDescription.sdp, type: 'offer' }), state.K) });
-    setStatus('Ожидаем ответ хоста…');
-    const w = await waitForMsg(async blob => {
-      const plain = blobUnwrap(blob, state.K);
-      if (!plain){ setStatus('Пароль комнаты не совпал. Проверьте пароль и «Переподключитесь»', 'err'); release(); return false; }
-      let msg;
-      try { msg = JSON.parse(plain); } catch { release(); return false; }
-      await pc.setRemoteDescription({ type: 'answer', sdp: msg.s });
-      setStatus('Ответ хоста получен (его кандидатов: ' + candCount(pc.remoteDescription) + '). Устанавливаем связь…');
-      connWatchdog();
-      return true;
-    }, 10 * 60 * 1000);
-    if (w.status === 'timeout'){ setStatus('Хост не ответил. Проверьте, что хостная страница открыта, и «Переподключитесь»', 'err'); release(); }
-  } catch (e) { setStatus(e.message, 'err'); release(); }
-  showReconnect();
-}
-
-$('btnHost').onclick = () => { state.hadConnect = false; lockInputs(true); hostRun(); };
-$('btnGuest').onclick = () => { state.hadConnect = false; lockInputs(true); guestRun(); };
-$('btnRe').onclick = () => {
-  stopPolling();
-  $('btnRe').hidden = true;
-  setStatus('Переподключение — нажмите на обоих ПК…');
-  asyncHostGuestRun();
+    await api('/api/box?room=' + encodeURIComponent(inp.room));
+  } catch (e) { setStatus(e.message, 'err'); return; }
+  state.connected = true; state.errs = 0;
+  state.room = inp.room; state.K = inp.K;
+  lockInputs(true);
+  $('cardFiles').hidden = false; $('cardBox').hidden = false;
+  setStatus('Подключено: хранилище «' + inp.room + '». Перетащите файлы — собеседник скачает из ящика.', 'ok');
+  await refreshBox();
+  pump();
+  schedulePoll();
 };
-
-function asyncHostGuestRun(){
-  if (state.role === 'guest') guestRun(); else hostRun();
-}
-
 function lockInputs(dis){
-  ['inServer','inRoom','inPass','btnHost','btnGuest'].forEach(id => $(id).disabled = dis);
+  ['inServer','inRoom','inPass','btnGo'].forEach(id => $(id).disabled = dis);
 }
-function release(){ if (!ready) lockInputs(false); } // при сбое/таймауте вернуть возможность нажать
-// подставляем адрес только в пустое поле — то, что ввёл пользователь, не трогаем
-if (location.host && !$('inServer').value) $('inServer').value = location.host;
+function schedulePoll(){
+  clearTimeout(state.pollTimer);
+  state.pollTimer = setTimeout(async () => {
+    if (!state.connected) return;
+    try {
+      await refreshBox();
+      state.errs = 0;
+    } catch (e) {
+      state.errs++;
+      if (state.errs >= 4){
+        state.connected = false;
+        setStatus(e.message + ' — повторите «Подключиться»', 'err');
+        lockInputs(false);
+        return;
+      }
+      setStatus(e.message + ' (повтор ' + state.errs + '/4)', 'err');
+    }
+    schedulePoll();
+  }, 4000);
+}
 
-/* ================= подсказка адресов сервера (LAN/интернет) ================= */
-/* Считается по содержимому поля (или по origin, если поле пусто и страница с сервера),
-   обновляется при изменении поля — никаких «старых портов» из загруженного адреса. */
+/* ============ подсказка адресов сервера (LAN/интернет) ============ */
 function addrForInfo(){
   const v = ($('inServer').value || '').trim();
-  if (v) return /^https?:\/\//.test(v) ? v.replace(/\/+$/, '') : 'http://' + v.replace(/\/+$/, '');
-  if (location.host) return location.protocol === 'https:' ? 'https://' + location.host : 'http://' + location.host;
+  if (v) return /^https?:\/\//i.test(v) ? v.replace(/\/+$/, '') : 'http://' + v.replace(/\/+$/, '');
+  if (location.host) return 'http://' + location.host;
   return null;
 }
 async function loadServerAddrs(){
@@ -600,23 +335,306 @@ async function loadServerAddrs(){
     const r = await fetch(base + '/api/server-info').then(x => x.json());
     const port = (typeof r.port === 'number' && r.port) ? r.port : null;
     const fmt = ip => port && port !== 80 ? `http://${ip}:${port}/` : `http://${ip}/`;
-    const lines = ['<b>Сервер-«сваха» ' + base + ':</b>'];
+    const lines = ['<b>Сервер ' + base + ':</b>'];
     for (const ip of (r.lan || [])) lines.push('• локальная сеть: <code>' + fmt(ip) + '</code>');
-    if (r.wan) lines.push('• интернет (нужен проброс порта TCP в роутере): <code>' + fmt(r.wan) + '</code>');
+    if (r.wan) lines.push('• интернет: <code>' + fmt(r.wan) + '</code>');
     box.innerHTML = lines.join('<br>');
     box.hidden = false;
   } catch (e) {
     box.innerHTML = '<span style="color:#f87171">Сервер по <code>' + (base || '?') + '</code> недоступен. ' +
-      'Вот URL страницы можно открывать прямо с него: запустите <code>php server.php</code> и зайдите по http://IP/</span>';
+      'Запустите <code>php server.php</code> и заходите по http://IP/</span>';
     box.hidden = false;
   }
 }
 let addrTimer = null;
-$('inServer').addEventListener('input', () => {
-  clearTimeout(addrTimer);
-  addrTimer = setTimeout(loadServerAddrs, 500);
-});
+$('inServer').addEventListener('input', () => { clearTimeout(addrTimer); addrTimer = setTimeout(loadServerAddrs, 500); });
 loadServerAddrs();
+if (location.host && !$('inServer').value) $('inServer').value = location.host;
+
+/* ============ загрузка файлов на сервер (до 2 параллельно) ============ */
+const CHUNK = 512 * 1024;      // data-размер куска
+const TAGB  = 32;              // байт тега после каждого куска
+const MAX_ACTIVE = 2;
+const STEP = CHUNK + TAGB;     // сколько занимает один кусок в файле на сервере
+
+const uploads = new Map();  // id → {id,file,name,size,type,nonce,metaSent,sent,t0,pos0,st}
+let nowUploading = 0;
+
+/* сколько data-байт уже на сервере для тела размером bodyBytes (куски полные либо частично последний) */
+function dataDone(bodyBytes){
+  const full = Math.floor(bodyBytes / STEP);       // полные куски
+  const rem = bodyBytes % STEP;
+  return full * CHUNK + Math.max(0, rem - TAGB);
+}
+function bodyTotal(size){ return size + TAGB * Math.ceil(size / CHUNK); }
+
+function fileIdOf(name, size){ return sha256hex(utf8('|id|' + name + ':' + size)).slice(0, 16); }
+
+function sendFile(file){
+  const id = fileIdOf(file.name, file.size);
+  const prev = uploads.get(id);
+  if (prev && (prev.st === 'run' || prev.st === 'queued')){
+    addBar(id, file.name + ' — уже идёт загрузка', false);
+    return;
+  }
+  const same = boxItems.get(id);
+  if (same && (same.ready || same.bytes >= bodyTotal(file.size))){
+    addBar(id, file.name + ' — уже есть в ящике', false);
+    markDone(id); setRowNote(id, 'готово — уже в ящике', false);
+    return;
+  }
+  let u;
+  if (prev && prev.st === 'fail') u = prev;               // повторный drag → докачка той же записи
+  else {
+    u = { id, file, name:file.name, size:file.size, type:file.type,
+          nonce:nonceHex(16), metaSent:false, sent:0, t0:0, pos0:0, st:'queued' };
+    uploads.set(id, u);
+  }
+  u.file = file;
+  if (same && !same.locked && same.bytes > 0 && same.bytes < bodyTotal(file.size)){
+    // докачка (в т.ч. после закрытия страницы): nonce и тело — из имеющейся метки
+    u.nonce = same.nonce; u.metaSent = true;
+    u.sent = dataDone(same.bytes);
+    u.st = 'queued'; u.t0 = 0;
+    addBar(id, file.name + ' (докачка ' + human(u.sent) + ')', false);
+  } else if (!prev){
+    u.sent = 0; u.metaSent = false;
+    addBar(id, file.name, false);
+  }
+  u.st = 'queued';
+  pump();
+}
+function pump(){
+  while (nowUploading < MAX_ACTIVE){
+    let next = null;
+    for (const u of uploads.values()) if (u.st === 'queued'){ next = u; break; }
+    if (!next) break;
+    next.st = 'run'; nowUploading++;
+    uploadRun(next).catch(e => uploadFail(next, e));
+  }
+}
+async function uploadRun(u){
+  u.t0 = performance.now(); u.pos0 = u.sent;
+  let off = u.sent;
+  try {
+    if (!u.metaSent){
+      const meta = blobWrap(JSON.stringify({ name:u.name, type:u.type, size:u.size, nonce:u.nonce }), state.K);
+      await api('/api/meta', { room: state.room, id: u.id, meta });
+      u.metaSent = true;
+      off = u.sent = 0;                       // метка сбрасывает тело сервера
+    } else {
+      const s = await api('/api/size?' + roomQ() + '&id=' + u.id);
+      off = u.sent = dataDone(s.bytes);
+    }
+    while (off < u.size){
+      if (!state.connected) throw new Error('соединение прервано');
+      const len = Math.min(CHUNK, u.size - off);
+      const bodyOff = Math.floor(off / CHUNK) * STEP;
+      const plain = new Uint8Array(await u.file.slice(off, off + len).arrayBuffer());
+      const ct = xorBytes(plain, keystreamAt(state.K, u.nonce, off, len));
+      const tagHex = sha256hex(state.K + '|' + u.nonce + '|' + off + '|' + latin1(ct));
+      const tagB = new Uint8Array(TAGB);
+      for (let i = 0; i < TAGB; i++) tagB[i] = parseInt(tagHex.substr(i*2,2), 16);
+      const frame = new Uint8Array(len + TAGB);
+      frame.set(ct, 0); frame.set(tagB, len);
+      let ok = false, lastErr = null;
+      for (let att = 0; att < 3 && !ok; att++){
+        try {
+          await apiRaw('/api/up?' + roomQ() + '&id=' + u.id + '&off=' + bodyOff, frame);
+          ok = true;
+        } catch (e) {
+          lastErr = e;
+          if (/Offset mismatch/.test(e.message)){
+            const s = await api('/api/size?' + roomQ() + '&id=' + u.id);
+            off = u.sent = dataDone(s.bytes); ok = true;
+          } else {
+            await sleep(400 * (att + 1));
+          }
+        }
+      }
+      if (!ok) throw (lastErr || new Error('кусок не принят'));
+      off += len; u.sent = off;
+      updateBar(u.id, u.sent / u.size, speed(u.t0, u.sent - u.pos0));
+    }
+    u.st = 'done'; nowUploading--;
+    markDone(u.id); setRowNote(u.id, 'готово — собеседник увидит в ящике', false);
+    refreshBox().catch(() => {});
+    pump();
+  } catch (e) {
+    u.st = 'fail'; nowUploading = Math.max(0, nowUploading - 1);
+    updateBar(u.id, u.sent / u.size, '');
+    setRowNote(u.id, 'ошибка: ' + e.message, true);
+    pump();
+  }
+}
+function setRowNote(id, text, err){
+  const row = document.querySelector(`[data-f="${id}"] .speed`);
+  if (row){ row.textContent = text; row.className = 'speed' + (err ? ' err' : ''); }
+}
+$('btnClear').onclick = () => {
+  for (const u of [...uploads.values()]) if (u.st === 'done'){
+    uploads.delete(u.id);
+    const row = document.querySelector(`[data-f="${u.id}"]`);
+    if (row) row.remove();
+  }
+};
+
+/* ================= ящик (общее хранилище) ================= */
+const boxItems = new Map();  // id → {id, bytes, ready, size, name, type, nonce, ts, locked}
+
+async function refreshBox(){
+  const r = await api('/api/box?' + roomQ());
+  for (const it of (r.list || [])){
+    let meta = null;
+    const inner = blobUnwrap(it.meta, state.K);
+    if (inner){ try { meta = JSON.parse(inner); } catch (e) { meta = null; } }
+    boxItems.set(it.id, meta
+      ? { id:it.id, bytes:it.bytes, size:meta.size, name:meta.name, type:meta.type,
+          nonce:meta.nonce, ts:it.ts, ready: it.bytes >= bodyTotal(meta.size), locked:false }
+      : { id:it.id, bytes:it.bytes, ts:it.ts, locked:true });
+  }
+  renderBox();
+}
+function renderBox(){
+  const tb = $('boxBody');
+  const items = [...boxItems.values()];
+  if (!items.length){ tb.innerHTML = '<tr><td colspan="4" class="prt">пусто — перетащите файлы выше</td></tr>'; return; }
+  tb.innerHTML = '';
+  for (const it of items){
+    const tr = el('tr');
+    const name = it.locked ? '(метка не расшифрована — другой пароль)' : it.name;
+    const status = it.locked ? 'нечитаемо, только размер'
+      : it.ready ? 'готов · ' + tsAgo(it.ts)
+      : 'загружается: ' + human(dataDone(it.bytes)) + ' / ' + human(it.size);
+    tr.innerHTML =
+      '<td>' + esc(name) + '</td>' +
+      '<td>' + human(it.locked ? it.bytes : it.size ?? it.bytes) + '</td>' +
+      '<td class="prt">' + status + '</td>' +
+      '<td class="acts">' +
+        (it.ready && !it.locked ? '<button class="dl" data-act="dl" data-id="' + it.id + '">Скачать</button>' : '') +
+        '<button class="dl ghost" data-act="del" data-id="' + it.id + '">Удалить</button>' +
+      '</td>';
+    tb.appendChild(tr);
+  }
+}
+$('boxBody').addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  try {
+    if (btn.dataset.act === 'del'){
+      await api('/api/del', { room: state.room, id });
+      boxItems.delete(id); dls.delete(id);
+      renderBox();
+    } else if (btn.dataset.act === 'dl'){
+      btn.disabled = true;
+      try { await downloadRun(id); }
+      catch (err) { setStatus('Скачивание «' + (boxItems.get(id)?.name || id) + '»: ' + err.message, 'err'); }
+      btn.disabled = false;
+    }
+  } catch (err) { setStatus(err.message, 'err'); }
+});
+
+/* ---- скачивание (с докачкой с последнего целого куска) ---- */
+const dls = new Map();   /* id → {off, parts, t0, pos0} */
+async function downloadRun(id){
+  const it = boxItems.get(id);
+  if (!it || it.locked) throw new Error('файл нечитаем');
+  if (it.bytes < bodyTotal(it.size)) throw new Error('загрузка ещё не завершена (' + human(dataDone(it.bytes)) + '/' + human(it.size) + ')');
+  let rec = dls.get(id) || dls.set(id, { off:0, parts:[], t0:0, pos0:0 }).get(id);
+  addBar(id, rec.off ? (it.name + ' (докачка ' + human(rec.off) + ')') : it.name, true);
+  rec.t0 = performance.now(); rec.pos0 = rec.off;
+  let off = rec.off;
+  try {
+    while (off < it.size){
+      const len = Math.min(CHUNK, it.size - off);
+      const bodyOff = Math.floor(off / CHUNK) * STEP;
+      const want = len + TAGB;
+      let frame = null;
+      for (let att = 0; att < 3 && !frame; att++){
+        try {
+          const r = await fetch(serverBase() + '/api/file?' + roomQ() + '&id=' + id + '&off=' + bodyOff + '&len=' + want);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          frame = new Uint8Array(await r.arrayBuffer());
+        } catch (e) {
+          await sleep(400 * (att + 1));
+          if (!state.connected) throw new Error('соединение прервано');
+        }
+      }
+      if (!frame) throw new Error('сервер не отдает кусок @' + off);
+      const ct = frame.subarray(0, len);
+      let tagHex = '';
+      for (let i = 0; i < TAGB; i++) tagHex += (frame[len + i] >> 4 ? frame[len+i].toString(16) : '0' + frame[len+i].toString(16));
+      const myTag = sha256hex(state.K + '|' + it.nonce + '|' + off + '|' + latin1(ct));
+      if (myTag !== tagHex) throw new Error('тег куска @' + off + ' не совпал (повреждение/чужой пароль)');
+      rec.parts.push(ct);
+      off += ct.length; rec.off = off;
+      updateBar(id, off / it.size, speed(rec.t0, off - rec.pos0));
+    }
+    /* расшифровка от начала файла и выдача на сохранение */
+    const total = rec.parts.reduce((s, p) => s + p.length, 0);
+    const cipher = new Uint8Array(total);
+    let w = 0;
+    for (const p of rec.parts){ cipher.set(p, w); w += p.length; }
+    const plain = xorBytes(cipher, keystreamAt(state.K, it.nonce, 0, total));
+    const blob = new Blob([plain], { type: it.type || 'application/octet-stream' });
+    const a = el('a', 'dl');
+    a.href = URL.createObjectURL(blob);
+    a.download = it.name;
+    a.textContent = '✔ ' + it.name + ' (' + human(blob.size) + ') — нажмите, если не открылось';
+    const row = document.querySelector(`[data-f="${id}"]`);
+    if (row) row.querySelector('.bar').replaceWith(a);
+    else { a.appendChild(el('div', 'meta')).textContent = ''; $('list').appendChild(a); }
+    dls.delete(id);
+  } catch (e) {
+    updateBar(id, off / it.size, '');
+    setRowNote(id, 'ошибка: ' + e.message + ' — нажмите «Скачать» для продолжения', true);
+  }
+}
+
+/* ================= ввод файлов ================= */
+$('drop').onclick = () => $('fileInput').click();
+$('fileInput').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
+$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
+$('drop').ondragleave = () => $('drop').classList.remove('over');
+$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('over'); handleFiles(e.dataTransfer.files); };
+function handleFiles(files){
+  if (!state.connected){ setStatus('Сначала подключитесь к комнате', 'err'); return; }
+  for (const f of files) sendFile(f);
+}
+
+/* ================= прогресс-строки ================= */
+function addBar(id, name, isRecv){
+  const old = document.querySelector(`[data-f="${id}"]`);
+  if (!old){
+    const row = el('div', 'tx'); row.dataset.f = id;
+    const meta = el('div', 'meta'); meta.textContent = name;
+    const bar = el('div', 'bar'); bar.appendChild(el('div'));
+    row.append(meta, bar, el('div', 'speed'));
+    $('list').appendChild(row);
+    return;
+  }
+  if (name) old.querySelector('.meta').textContent = name;
+  if (!old.querySelector('.bar')){          // была ссылка после прошлого скачивания — вернуть бар
+    const a = old.querySelector('a.dl'); if (a) a.remove();
+    const bar = el('div', 'bar'); bar.appendChild(el('div'));
+    old.insertBefore(bar, old.querySelector('.speed'));
+  }
+}
+function updateBar(id, frac, sp){
+  const row = document.querySelector(`[data-f="${id}"]`); if (!row) return;
+  const fill = row.querySelector('.bar > div');
+  if (!fill) return;              // строка уже с готовой ссылкой — прогресс не трогаем
+  fill.style.width = Math.min(100, Math.floor(frac * 100)) + '%';
+  if (sp !== undefined) row.querySelector('.speed').textContent = sp;
+}
+function markDone(id){
+  const row = document.querySelector(`[data-f="${id}"]`);
+  if (!row) return;
+  const b = row.querySelector('.bar > div'); if (b) b.style.width = '100%';
+}
+
+window.addEventListener('beforeunload', () => { state.connected = false; clearTimeout(state.pollTimer); });
 </script>
 </body>
 </html>
