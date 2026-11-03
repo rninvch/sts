@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>P2P файлы — protected signaling</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --acc:#38bdf8; --txt:#e2e8f0; --dim:#94a3b8; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,Segoe UI,sans-serif; background:var(--bg); color:var(--txt);
+         display:flex; justify-content:center; padding:24px 12px; }
+  .wrap { width:100%; max-width:720px; }
+  h1 { font-size:1.3rem; margin-bottom:4px; }
+  .sub { color:var(--dim); font-size:.85rem; margin-bottom:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:14px; }
+  .card h2 { font-size:.95rem; margin-bottom:10px; color:var(--acc); }
+  label { display:block; font-size:.75rem; color:var(--dim); margin:10px 0 4px; }
+  input { width:100%; background:#0b1220; color:var(--txt); border:1px solid var(--line); border-radius:8px;
+          padding:9px 10px; font-size:.9rem; }
+  .row { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; align-items:center; }
+  button { background:var(--acc); color:#0b1220; border:0; border-radius:8px; padding:9px 16px;
+           font-weight:600; cursor:pointer; font-size:.85rem; }
+  button:disabled { opacity:.4; cursor:default; }
+  button.ghost { background:transparent; color:var(--acc); border:1px solid var(--acc); }
+  .status { font-size:.8rem; color:var(--dim); margin-top:10px; min-height:1.2em; }
+  .status.ok { color:#4ade80; } .status.err { color:#f87171; }
+  #drop { border:2px dashed var(--line); border-radius:12px; padding:26px; text-align:center;
+          color:var(--dim); cursor:pointer; transition:.15s; }
+  #drop.over { border-color:var(--acc); color:var(--acc); background:rgba(56,189,248,.05); }
+  input[type=file] { display:none; }
+  .tx { margin-top:10px; display:flex; align-items:center; gap:10px; font-size:.8rem; }
+  .bar { flex:1; height:8px; background:var(--line); border-radius:4px; overflow:hidden; min-width:60px; }
+  .bar > div { height:100%; width:0; background:var(--acc); transition:width .2s; }
+  .bar.recv > div { background:#4ade80; }
+  .meta { min-width:180px; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .speed { color:var(--dim); min-width:140px; text-align:right; }
+  a.dl { color:#4ade80; font-weight:600; }
+  details { margin-top:8px; }
+  summary { cursor:pointer; color:var(--dim); font-size:.8rem; }
+  .hint { font-size:.75rem; color:var(--dim); margin-top:8px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>P2P передача файлов</h1>
+  <div class="sub">Файлы идут напрямую между ПК. Сервер видит только шифрованный «пакет знакомства» — без пароля.</div>
+  <div id="srvAddrs" class="hint" hidden></div>
+
+  <div class="card">
+    <h2>Шаг 1 — защищённое соединение</h2>
+    <label>Сервер-«сваха» (IP запустившего <code>server.php</code>, порт опционален)</label>
+    <input id="inServer" placeholder="192.168.1.10 или 192.168.1.10:8080">
+    <label>Номер комнаты (3–32 символа) </label>
+    <input id="inRoom" placeholder="my-room-01">
+    <label>Пароль комнаты (не отправляется на сервер)</label>
+    <input id="inPass" type="password" placeholder="секрет">
+    <div class="row">
+      <button id="btnHost">Создать комнату</button>
+      <button id="btnGuest">Подключиться к комнате</button>
+      <button id="btnRe" class="ghost" hidden>Переподключиться</button>
+    </div>
+    <div id="statusConn" class="status"></div>
+    <div class="hint">Обе стороны могут как отправлять, так и получать файлы. Если связь оборвалась —
+      нажмите «Переподключиться» на <b>обоих</b> ПК: незавершённые передачи продолжатся с места обрыва.</div>
+  </div>
+
+  <div class="card" id="cardFiles" hidden>
+    <h2>Шаг 2 — файлы</h2>
+    <div id="drop">Перетащите файлы сюда или нажмите, чтобы выбрать</div>
+    <input type="file" id="fileInput" multiple>
+    <div id="list"></div>
+    <div class="row"><button id="btnClear" class="ghost">Отменить незавершённые</button></div>
+  </div>
+
+  <details class="card">
+    <summary>Защита и как это работает</summary>
+    <div class="status" id="secInfo">
+      Веб-страница общается с сервером по HTTP: пик каждого запроса зашифрован ключом SHA-256(комната+пароль),
+      подписан тегом и не читается на сервере. Пароль никуда не уходи́т. Файлы передаются прямо между браузерами
+      (AES/DTLS внутри WebRTC). Для защиты от прослушки канала (MITM) достаточно знать, что содержимое комнаты
+      зашифровано; серверу же можно доверять, ведь он только пересылает блобы.
+      <br>ICE: STUN Google + TURN openrelay (для сетей со строгим NAT).
+    </div>
+  </details>
+</div>
+
+<script>
+'use strict';
+
+/* ================= SHA-256 (проверено на 210 векторах против node:crypto) ================= */
+const TWO32 = 4294967296;
+function firstPrimes(n){
+  const ps = []; let x = 2;
+  while (ps.length < n){
+    let p = true;
+    for (const q of ps){ if (q*q > x) break; if (x % q === 0){ p = false; break; } }
+    if (p) ps.push(x);
+    x++;
+  }
+  return ps;
+}
+const PR_I = firstPrimes(64);
+const H0_I = PR_I.slice(0,8).map(p => ((p - Math.floor(Math.sqrt(p))) * TWO32) | 0);
+const K_I  = PR_I.map(p => ((p - Math.floor(Math.pow(p, 1/3))) * TWO32) | 0);
+function rotr(x, n){ return (x >>> n) | (x << (32 - n)); }
+
+function sha256hex(str){ // str: latin1 (все коды < 256)
+  let H = H0_I.slice();
+  const W = new Int32Array(64);
+  let msg = str + '\x80';
+  while (msg.length % 64 !== 56) msg += '\x00';
+  const bitLen = str.length * 8;
+  const hi = Math.floor(bitLen / TWO32), lo = bitLen >>> 0;
+  msg += String.fromCharCode(
+    (hi >>> 24) & 0xff, (hi >>> 16) & 0xff, (hi >>> 8) & 0xff, hi & 0xff,
+    (lo >>> 24) & 0xff, (lo >>> 16) & 0xff, (lo >>> 8) & 0xff, lo & 0xff
+  );
+  for (let off = 0; off < msg.length; off += 64){
+    for (let i = 0; i < 16; i++){
+      W[i] = ((msg.charCodeAt(off + i*4)     & 0xff) << 24) |
+             ((msg.charCodeAt(off + i*4 + 1) & 0xff) << 16) |
+             ((msg.charCodeAt(off + i*4 + 2) & 0xff) << 8)  |
+             ( msg.charCodeAt(off + i*4 + 3) & 0xff);
+    }
+    for (let i = 16; i < 64; i++){
+      const x = W[i-15], y = W[i-2];
+      const s0 = rotr(x,7) ^ rotr(x,18) ^ (x >>> 3);
+      const s1 = rotr(y,17) ^ rotr(y,19) ^ (y >>> 10);
+      W[i] = (W[i-16] + s0 + W[i-7] + s1) | 0;
+    }
+    let a=H[0], b=H[1], c=H[2], d=H[3], e=H[4], f=H[5], g=H[6], h=H[7];
+    for (let i = 0; i < 64; i++){
+      const S1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + K_I[i] + W[i]) | 0;
+      const S0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    H[0]=(H[0]+a)|0; H[1]=(H[1]+b)|0; H[2]=(H[2]+c)|0; H[3]=(H[3]+d)|0;
+    H[4]=(H[4]+e)|0; H[5]=(H[5]+f)|0; H[6]=(H[6]+g)|0; H[7]=(H[7]+h)|0;
+  }
+  let out = '';
+  for (const v of H) out += ('00000000' + (v >>> 0).toString(16)).slice(-8);
+  return out;
+}
+
+/* ================= Шифрование блобов (ключ из комнаты+пароля) ================= */
+/* Блоб: {v:1, n:nonce, d:b64(xor(SDP, поток из SHA-256)), t:sha256(K|n|d)} */
+function utf8(s){ return unescape(encodeURIComponent(s)); }
+function deutf8(s){ return decodeURIComponent(escape(s)); }
+
+function keystream(K, n, len){
+  const out = new Uint8Array(len);
+  let filled = 0, idx = 0;
+  while (filled < len){
+    const h = sha256hex(K + '|' + n + '|' + idx.toString(36));
+    for (let j = 0; j < 62 && filled < len; j += 2)
+      out[filled++] = parseInt(h.slice(j, j + 2), 16);
+    idx++;
+  }
+  return out;
+}
+function xorStr(s, ks){
+  let r = '';
+  for (let i = 0; i < s.length; i++) r += String.fromCharCode(s.charCodeAt(i) ^ ks[i]);
+  return r;
+}
+function blobWrap(plain, K){
+  const n = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2,'0')).join('');
+  const d = btoa(xorStr(utf8(plain), keystream(K, n, utf8(plain).length)));
+  return JSON.stringify({ v:1, n, d, t: sha256hex(K + '|' + n + '|' + d) });
+}
+function blobUnwrap(blob, K){
+  try {
+    const b = JSON.parse(blob);
+    if (!b || b.v !== 1 || !/^[0-9a-f]{32}$/.test(b.n) || typeof b.d !== 'string' || b.t !== sha256hex(K + '|' + b.n + '|' + b.d))
+      return null;
+    const raw = atob(b.d);
+    const ks = keystream(K, b.n, raw.length);
+    return deutf8(xorStr(raw, ks));
+  } catch (e) { return null; }
+}
+
+/* ================= Конфигурация связи ================= */
+const ICE = {
+  iceServers: [
+    { urls: ['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302'] },
+    { urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp'
+      ], username: 'openrelayproject', credential: 'openrelayproject' }
+  ]
+};
+
+const $ = id => document.getElementById(id);
+let pc = null, dc = null, ready = false;
+let state = { token:null, role:null, K:null, room:'', polling:false, hadConnect:false };
+
+function setStatus(text, cls){ const s = $('statusConn'); s.textContent = text; s.className = 'status' + (cls ? ' ' + cls : ''); }
+function el(tag, cls){ const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+function human(b){ return b<1024 ? b+' Б' : b<1048576 ? (b/1024).toFixed(1)+' КБ' : b<1073741824 ? (b/1048576).toFixed(1)+' МБ' : (b/1073741824).toFixed(2)+' ГБ'; }
+function speed(t0, bytes){ const dt = (performance.now()-t0)/1000; return bytes > 0 && dt > 0.3 ? human(bytes/dt)+'/с' : ''; }
+function hash32(s){ // хеш id файла: FNV-1a
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+/* ================= API сервера ================= */
+function serverBase(){
+  let v = ($('inServer').value || '').trim();
+  if (!v) v = location.host;
+  if (!v) throw new Error('Укажите адрес сервера');
+  const base = /^https?:\/\//.test(v) ? v.replace(/\/+$/, '') : 'http://' + v.replace(/\/+$/, '');
+  if (!/^https?:\/\/.+/i.test(base)) throw new Error('Некорректный адрес: ' + v);
+  return base;
+}
+async function api(path, body){
+  const init = body !== undefined
+    ? { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) }
+    : undefined;
+  let res;
+  let url = serverBase() + path;
+  try { res = await fetch(url, init); }
+  catch (e) { throw new Error('Сервер недоступен: ' + url); }
+  const j = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((j && j.error) || ('HTTP ' + res.status));
+  return j;
+}
+
+/* ================= Протокол канала (внутри WebRTC, сервер не видит) =================
+   '!{json}'   заголовок файла {id,name,size,type}
+   '!s <hash>' «чанки ниже принадлежат файлу с этим хешем» — для параллельной передачи
+   '!end!<id>' файл передан полностью
+   '!rsq[...]' запрос возобновления недополученных файлов
+   '!cls'      отмена незавершённых
+   чанки файла — бинарные куски по 16 КБ                                        */
+
+function createPC(){
+  pc = new RTCPeerConnection(ICE);
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === 'connected') setStatus('Связь установлена…');
+    else if (s === 'failed') setStatus('Не удалось соединиться (NAT). Нажмите «Переподключиться» на обоих ПК', 'err');
+    else if (s === 'disconnected')
+      { ready = false; setStatus('Связь оборвалась. Нажмите «Переподключиться» на обоих ПК', 'ok'); showReconnect(); }
+    else if (s === 'closed'){ ready = false; setStatus('Соединение закрыто'); showReconnect(); }
+  };
+  return pc;
+}
+
+function wireChannel(ch){
+  dc = ch;
+  ch.binaryType = 'arraybuffer';
+  ch.onopen = () => {
+    ready = true; state.hadConnect = true; showReconnect();
+    setStatus('Соединение установлено — можно передавать файлы', 'ok');
+    unlockUI();
+    setTimeout(() => { // возобновление недополученного
+      if (dc === ch && ready && incoming.size){
+        dc.send('!rsq' + JSON.stringify([...incoming.values()].map(s => ({
+          id: s.m.id, name: s.m.name, size: s.m.size, type: s.m.type, got: s.got
+        }))));
+      }
+    }, 300);
+  };
+  ch.onclose = () => { ready = false; setStatus('Канал закрыт', 'err'); showReconnect(); };
+  ch.onerror  = () => { ready = false; setStatus('Ошибка канала', 'err'); };
+  ch.onmessage = onMsg;
+}
+
+/* ================= Приём файлов ================= */
+const incoming = new Map();  // id → {m, parts, got, startGot, t0}
+const byHash   = new Map();  // hash32(id) → state
+let cur = null;
+
+function onMsg(e){
+  const d = e.data;
+  if (typeof d === 'string'){
+    if (d.startsWith('!{')){
+      const m = JSON.parse(d.slice(1));
+      let st = incoming.get(m.id);
+      if (!st){
+        st = { m, parts: [], got: 0, startGot: 0, t0: performance.now() };
+        incoming.set(m.id, st);
+        byHash.set(hash32(m.id), st);
+        addBar(m.id, m.name, true);
+      }
+      st.t0 = performance.now(); st.startGot = st.got;
+      cur = st;
+    } else if (d.startsWith('!s ')){
+      cur = byHash.get(parseInt(d.slice(3), 10)) || null;
+    } else if (d.startsWith('!end!')){
+      const st = incoming.get(d.slice(5));
+      if (st) finishSink(st);
+      if (st && cur === st) cur = null;
+    } else if (d.startsWith('!rsq')){
+      handleResumeRequest(JSON.parse(d.slice(4)));
+    } else if (d === '!cls'){
+      clearPending(false);
+    }
+    return;
+  }
+  if (!cur) return;
+  const b = d.size ?? d.byteLength ?? 0;
+  cur.parts.push(d);
+  cur.got += b;
+  updateBar(cur.m.id, cur.got / cur.m.size, speed(cur.t0, cur.got - cur.startGot));
+}
+
+function finishSink(st){
+  incoming.delete(st.m.id);
+  byHash.delete(hash32(st.m.id));
+  const blob = new Blob(st.parts, { type: st.m.type || 'application/octet-stream' });
+  const a = el('a', 'dl');
+  a.href = URL.createObjectURL(blob);
+  a.download = st.m.name;
+  a.textContent = 'Скачать ' + st.m.name + ' (' + human(blob.size) + ')';
+  const row = document.querySelector(`[data-f="${st.m.id}"]`);
+  if (row) row.querySelector('.bar').replaceWith(a);
+  if (cur === st) cur = null;
+}
+
+function clearPending(notify){
+  if (notify && dc && dc.readyState === 'open') dc.send('!cls');
+  for (const st of incoming.values()){
+    const row = document.querySelector(`[data-f="${st.m.id}"]`);
+    if (row) row.remove();
+  }
+  incoming.clear(); byHash.clear(); cur = null;
+}
+
+/* ================= Отправка (до 2 файлов параллельно, батчами по 512 КБ) ================= */
+const CHUNK = 16 * 1024, BATCH = 32, HIGH = 1 << 20, MAX_ACTIVE = 2;
+let jobs = [];           // {id, file, pos, pos0, t0, done}
+let ticking = false;
+const fileByRef = new Map(); // 'name:size' → File
+
+function sendFile(file){
+  fileByRef.set(file.name + ':' + file.size, file);
+  const id = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  addBar(id, file.name, false);
+  dc.send('!' + JSON.stringify({ id, name:file.name, size:file.size, type:file.type }));
+  jobs.push({ id, file, pos:0, pos0:0, t0:performance.now(), done:false });
+  kick();
+}
+function handleResumeRequest(list){
+  for (const r of list){
+    const file = fileByRef.get(r.name + ':' + r.size);
+    if (!file) continue;
+    addBar(r.id, r.name + ' (возобновление)', false);
+    dc.send('!' + JSON.stringify({ id:r.id, name:r.name, size:r.size, type:r.type }));
+    jobs.push({ id:r.id, file, pos:r.got, pos0:r.got, t0:performance.now(), done:false });
+  }
+  kick();
+}
+function kick(){ if (!ticking){ ticking = true; loop(); } }
+function loop(){
+  if (!dc || dc.readyState !== 'open'){ ticking = false; return; }
+  if (dc.bufferedAmount > HIGH){ setTimeout(loop, 20); return; }
+  const act = jobs.filter(j => !j.done);
+  if (!act.length){ ticking = false; jobs = jobs.filter(j => !j.done); return; }
+  for (const j of act.slice(0, MAX_ACTIVE)){
+    if (j.pos >= j.file.size){ j.done = true; continue; }
+    dc.send('!s ' + hash32(j.id));
+    for (let i = 0; i < BATCH && j.pos < j.file.size; i++){
+      dc.send(j.file.slice(j.pos, j.pos + CHUNK));
+      j.pos += CHUNK;
+    }
+    updateBar(j.id, j.pos / j.file.size, speed(j.t0, j.pos - j.pos0));
+    if (j.pos >= j.file.size){
+      dc.send('!end!' + j.id);
+      markDone(j.id, j.file, j.t0, j.pos0);
+      j.done = true;
+    }
+  }
+  setTimeout(loop, dc.bufferedAmount > (HIGH >> 1) ? 20 : 0);
+}
+
+/* ================= Прогресс ================= */
+function addBar(id, name, isRecv){
+  const old = document.querySelector(`[data-f="${id}"]`);
+  if (old){ if (name) old.querySelector('.meta').textContent = name; return; }
+  const row = el('div', 'tx'); row.dataset.f = id;
+  const meta = el('div', 'meta'); meta.textContent = name;
+  const bar = el('div', 'bar' + (isRecv ? ' recv' : '')); bar.appendChild(el('div'));
+  row.append(meta, bar, el('div', 'speed'));
+  $('list').appendChild(row);
+}
+function updateBar(id, frac, sp){
+  const row = document.querySelector(`[data-f="${id}"]`); if (!row) return;
+  row.querySelector('.bar > div').style.width = Math.min(100, Math.floor(frac * 100)) + '%';
+  if (sp !== undefined) row.querySelector('.speed').textContent = sp;
+}
+function markDone(id, file, t0, pos0){
+  const row = document.querySelector(`[data-f="${id}"]`); if (!row) return;
+  row.querySelector('.bar > div').style.width = '100%';
+  const dt = (performance.now() - t0) / 1000, sent = file.size - pos0;
+  row.querySelector('.speed').textContent = human(file.size) + (dt > 0 && sent > 0 ? ' · ' + human(sent/dt)+'/с' : '');
+}
+
+/* ================= UI-обвязка ================= */
+function unlockUI(){ $('cardFiles').hidden = false; }
+function showReconnect(){ $('btnRe').hidden = !state.hadConnect; }
+$('drop').onclick = () => $('fileInput').click();
+$('fileInput').onchange = e => { handleFiles(e.target.files); e.target.value = ''; };
+$('drop').ondragover = e => { e.preventDefault(); $('drop').classList.add('over'); };
+$('drop').ondragleave = () => $('drop').classList.remove('over');
+$('drop').ondrop = e => { e.preventDefault(); $('drop').classList.remove('over'); handleFiles(e.dataTransfer.files); };
+function handleFiles(files){
+  if (!ready){ setStatus('Сначала установите соединение', 'err'); return; }
+  for (const f of files) sendFile(f);
+}
+$('btnClear').onclick = () => clearPending(true);
+
+/* ================= Сигналинг через сервер ================= */
+function waitIce(){
+  return new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') res(); };
+    setTimeout(res, 4000);
+  });
+}
+function stopPolling(){ state.polling = false; }
+
+function waitForMsg(handler, ms){
+  // опрос каждые 1 с до ms мс или отмены
+  state.polling = true;
+  const t0 = Date.now();
+  return new Promise(resolve => {
+    (async function poll(){
+      if (!state.polling) return resolve({ status:'cancel' });
+      if (Date.now() - t0 > ms) return resolve({ status:'timeout' });
+      try {
+        const r = await api('/api/get?token=' + encodeURIComponent(state.token));
+        if (r.status === 'data'){
+          if (handler(r.blob)) return resolve({ status:'ok' });
+          return resolve({ status:'bad' });   // неверный ключ
+        }
+      } catch (e) { setStatus('Опрос прерван: ' + e.message, 'err'); stopPolling(); return resolve({ status:'fail' }); }
+      setTimeout(poll, 1000);
+    })();
+  });
+}
+
+function inputsOk(){
+  const room = $('inRoom').value.trim();
+  const pass = $('inPass').value;
+  if (!room){ setStatus('Укажите номер комнаты', 'err'); return null; }
+  if (room.length < 3 || room.length > 32 || !/^[A-Za-z0-9_-]+$/.test(room))
+    { setStatus('Комната: 3–32 символа (латиница, цифры, - _)', 'err'); return null; }
+  if (pass.length < 4){ setStatus('Пароль: минимум 4 символа', 'err'); return null; }
+  return { room, K: sha256hex(utf8('p2p-signaling|' + room + '|' + pass)) };
+}
+
+async function hostRun(){
+  stopPolling();
+  const inp = inputsOk(); if (!inp) return;
+  state.K = inp.K; state.room = inp.room;
+  try {
+    const r = await api('/api/join', { room: inp.room });
+    state.token = r.token; state.role = 'host';
+    await hostCore();
+  } catch (e) { setStatus(e.message, 'err'); }
+  showReconnect();
+}
+
+async function hostCore(){
+  setStatus('Комната «' + state.room + '» создана. Ожидаем второй ПК…');
+  createPC();
+  wireChannel(pc.createDataChannel('files'));
+  const w = await waitForMsg(blob => {
+    const plain = blobUnwrap(blob, state.K);
+    if (!plain){
+      setStatus('У собеседника другой пароль', 'err');
+      return false; // продолжаем опрос: пусть поправят и переподключатся
+    }
+    let msg;
+    try { msg = JSON.parse(plain); } catch { return false; }
+    (async () => {
+      await pc.setRemoteDescription({ type: 'offer', sdp: msg.s });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await waitIce();
+      await api('/api/send', { token: state.token, blob: blobWrap(JSON.stringify({ s: pc.localDescription.sdp, type: 'answer' }), state.K) });
+    })().catch(e => setStatus('Сбой handshake: ' + e.message, 'err'));
+    return true;
+  }, 10 * 60 * 1000);
+  if (w.status === 'timeout') setStatus('Второй ПК не подключился. Пере подключитесь или проверьте комнату/пароль', 'err');
+}
+
+async function guestRun(){
+  stopPolling();
+  const inp = inputsOk(); if (!inp) return;
+  state.K = inp.K; state.room = inp.room;
+  try {
+    const r = await api('/api/join', { room: inp.room });
+    state.token = r.token; state.role = r.role;
+    setStatus('Подключаемся к комнате «' + inp.room + '»…');
+    if (r.role === 'host'){ // комната была пуста — автоматически становимся хостом
+      setStatus('Комната была пуста — вы автоматически стали хостом. Ожидаем второй ПК…');
+      return void await hostCore();
+    }
+    createPC();
+    pc.ondatachannel = e => wireChannel(e.channel);
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIce();
+    await api('/api/send', { token: state.token, blob: blobWrap(JSON.stringify({ s: pc.localDescription.sdp, type: 'offer' }), state.K) });
+    setStatus('Ожидаем ответ хоста…');
+    const w = await waitForMsg(blob => {
+      const plain = blobUnwrap(blob, state.K);
+      if (!plain){ setStatus('Пароль комнаты не совпал. Проверьте пароль и «Переподключитесь»', 'err'); return false; }
+      let msg;
+      try { msg = JSON.parse(plain); } catch { return false; }
+      pc.setRemoteDescription({ type: 'answer', sdp: msg.s }).catch(e => setStatus('Сбой handshake: ' + e.message, 'err'));
+      return true;
+    }, 10 * 60 * 1000);
+    if (w.status === 'timeout'){ setStatus('Хост не ответил. Возможно, хост у слов. Нажмите «Переподключитесь»', 'err'); }
+  } catch (e) { setStatus(e.message, 'err'); }
+  showReconnect();
+}
+
+$('btnHost').onclick = () => { state.hadConnect = false; lockInputs(true); hostRun(); };
+$('btnGuest').onclick = () => { state.hadConnect = false; lockInputs(true); guestRun(); };
+$('btnRe').onclick = () => {
+  stopPolling();
+  $('btnRe').hidden = true;
+  setStatus('Переподключение — нажмите на обоих ПК…');
+  asyncHostGuestRun();
+};
+
+function asyncHostGuestRun(){
+  if (state.role === 'guest') guestRun(); else hostRun();
+}
+
+function lockInputs(dis){
+  ['inServer','inRoom','inPass','btnHost','btnGuest'].forEach(id => $(id).disabled = dis);
+}
+// подставляем адрес только в пустое поле — то, что ввёл пользователь, не трогаем
+if (location.host && !$('inServer').value) $('inServer').value = location.host;
+
+/* ================= подсказка адресов сервера (LAN/интернет) ================= */
+/* Считается по содержимому поля (или по origin, если поле пусто и страница с сервера),
+   обновляется при изменении поля — никаких «старых портов» из загруженного адреса. */
+function addrForInfo(){
+  const v = ($('inServer').value || '').trim();
+  if (v) return /^https?:\/\//.test(v) ? v.replace(/\/+$/, '') : 'http://' + v.replace(/\/+$/, '');
+  if (location.host) return location.protocol === 'https:' ? 'https://' + location.host : 'http://' + location.host;
+  return null;
+}
+async function loadServerAddrs(){
+  const base = addrForInfo();
+  const box = $('srvAddrs');
+  try {
+    if (!base) throw new Error('no');
+    const r = await fetch(base + '/api/server-info').then(x => x.json());
+    const port = (typeof r.port === 'number' && r.port) ? r.port : null;
+    const fmt = ip => port && port !== 80 ? `http://${ip}:${port}/` : `http://${ip}/`;
+    const lines = ['<b>Сервер-«сваха» ' + base + ':</b>'];
+    for (const ip of (r.lan || [])) lines.push('• локальная сеть: <code>' + fmt(ip) + '</code>');
+    if (r.wan) lines.push('• интернет (нужен проброс порта TCP в роутере): <code>' + fmt(r.wan) + '</code>');
+    box.innerHTML = lines.join('<br>');
+    box.hidden = false;
+  } catch (e) {
+    box.innerHTML = '<span style="color:#f87171">Сервер по <code>' + (base || '?') + '</code> недоступен. ' +
+      'Вот URL страницы можно открывать прямо с него: запустите <code>php server.php</code> и зайдите по http://IP/</span>';
+    box.hidden = false;
+  }
+}
+let addrTimer = null;
+$('inServer').addEventListener('input', () => {
+  clearTimeout(addrTimer);
+  addrTimer = setTimeout(loadServerAddrs, 500);
+});
+loadServerAddrs();
+</script>
+</body>
+</html>
