@@ -6,6 +6,7 @@
 
 $ListenPort = 8080
 $BlockedDomains = @(
+    "mail.google.com",
     "qwen.ai",
     "chat.qwen.ai",
     "z.ai",
