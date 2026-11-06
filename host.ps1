@@ -6,6 +6,10 @@
 
 $ListenPort = 8080
 $BlockedDomains = @(
+    "qwen.ai",
+    "chat.qwen.ai",
+    "z.ai",
+    "chat.z.ai",
     "deepseek.com",
     "chat.deepseek.com",
     "api.deepseek.com",
